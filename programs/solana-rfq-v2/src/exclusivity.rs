@@ -13,12 +13,7 @@ pub fn check_fill_exclusivity(
     let current = load_current_index_checked(instructions_sysvar)? as usize;
 
     let mut idx: usize = 0;
-    loop {
-        let ix = match load_instruction_at_checked(idx, instructions_sysvar) {
-            Ok(ix) => ix,
-            Err(_) => break,
-        };
-
+    while let Ok(ix) = load_instruction_at_checked(idx, instructions_sysvar) {
         if idx != current {
             for meta in &ix.accounts {
                 require!(
