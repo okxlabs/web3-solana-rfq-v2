@@ -1,5 +1,5 @@
 use crate::error::ErrorCode;
-use crate::state::Level;
+use crate::types::Level;
 use anchor_lang::prelude::*;
 use core::cmp::Ordering;
 
@@ -48,9 +48,7 @@ pub fn sweep_bid(amount_in: u64, min_out_atoms: u64, levels: &[Level]) -> Result
                 .ok_or(ErrorCode::Overflow)?;
             require!(partial <= u64::MAX as u128, ErrorCode::Overflow);
             require!(partial > 0, ErrorCode::InsufficientLiquidity);
-            out = out
-                .checked_add(partial as u64)
-                .ok_or(ErrorCode::Overflow)?;
+            out = out.checked_add(partial as u64).ok_or(ErrorCode::Overflow)?;
             remaining = 0;
             break;
         }
@@ -89,9 +87,7 @@ pub fn sweep_ask(amount_in: u64, min_out_atoms: u64, levels: &[Level]) -> Result
                 .ok_or(ErrorCode::Overflow)?;
             require!(partial <= u64::MAX as u128, ErrorCode::Overflow);
             require!(partial > 0, ErrorCode::InsufficientLiquidity);
-            out = out
-                .checked_add(partial as u64)
-                .ok_or(ErrorCode::Overflow)?;
+            out = out.checked_add(partial as u64).ok_or(ErrorCode::Overflow)?;
             remaining = 0;
             break;
         }
@@ -107,7 +103,10 @@ mod tests {
     use super::*;
 
     fn lvl(b: u64, q: u64) -> Level {
-        Level { base_atoms: b, quote_atoms: q }
+        Level {
+            base_atoms: b,
+            quote_atoms: q,
+        }
     }
 
     // §6 — sort validation

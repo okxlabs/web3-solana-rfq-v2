@@ -1,7 +1,7 @@
 use crate::checks::{check_fill_exclusivity, check_mint_compatibility};
 use crate::error::ErrorCode;
-use crate::state::{FillExactInParams, Side};
 use crate::sweep::{assert_sorted_ask, assert_sorted_bid, sweep_ask, sweep_bid};
+use crate::types::{FillExactInParams, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar;
 use anchor_spl::token_interface::{

@@ -3,11 +3,11 @@ use anchor_lang::prelude::*;
 pub mod checks;
 pub mod error;
 pub mod handler;
-pub mod state;
 pub mod sweep;
+pub mod types;
 
 use crate::handler::*;
-use crate::state::{FillExactInParams, Side};
+use crate::types::{FillExactInParams, Side};
 
 declare_id!("2NWeqNzPxecVfGsA2fVSVa6ZQKiCWWUAJ7w8fDPej3n8");
 
