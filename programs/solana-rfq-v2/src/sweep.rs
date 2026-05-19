@@ -261,3 +261,41 @@ mod tests {
         assert!(format!("{err:?}").contains("InsufficientLiquidity"));
     }
 }
+
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    fn any_valid_level() -> Level {
+        let level = Level {
+            base_atoms: kani::any(),
+            quote_atoms: kani::any(),
+        };
+        kani::assume(level.base_atoms > 0);
+        kani::assume(level.quote_atoms > 0);
+        level
+    }
+
+    /// §7: single-level partial fill loses < 1 output atom to integer division.
+    ///
+    /// Real-valued ideal:   ideal_out  = amount_in × base / quote
+    /// Integer actual:      actual_out = floor(ideal_out)
+    /// Invariant proved:    ideal_out − actual_out < 1
+    ///                  ⇔ numerator − actual_out × quote < quote
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn bid_partial_dust_below_one_atom() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        kani::assume(amount_in > 0);
+        kani::assume(amount_in < level.quote_atoms);
+
+        let levels = vec![level];
+        if let Ok(actual_out) = sweep_bid(amount_in, 0, &levels) {
+            let numerator = (amount_in as u128) * (level.base_atoms as u128);
+            let used = (actual_out as u128) * (level.quote_atoms as u128);
+            assert!(numerator >= used);
+            assert!(numerator - used < level.quote_atoms as u128);
+        }
+    }
+}

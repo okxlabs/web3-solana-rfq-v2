@@ -22,3 +22,6 @@ anchor-lang = "0.31.1"
 anchor-spl = { version = "0.31.1", features = ["token", "token_2022"] }
 spl-token-2022 = { version = "6", features = ["no-entrypoint"] }
 
+[dev-dependencies]
+kani-verifier = "0.55"
+
