@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 pub mod error;
+pub mod mint_check;
 pub mod sort;
 pub mod state;
 pub mod sweep;
