@@ -167,4 +167,81 @@ describe("solana-rfq-v2 fill_exact_in", () => {
       expect(e.toString()).to.match(/InvalidLevelOrdering|6003/);
     }
   });
+
+  it("Ask: full consume with partial last level", async () => {
+    const levels = [
+      { baseAtoms: new BN("100000000000"), quoteAtoms: new BN("8490000000") },
+      { baseAtoms: new BN("200000000000"), quoteAtoms: new BN("16960000000") },
+      { baseAtoms: new BN("300000000000"), quoteAtoms: new BN("25410000000") },
+    ];
+    const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
+
+    const payer = (provider.wallet as anchor.Wallet).payer;
+    await mintTo(provider.connection, payer, baseMint, userBase, payer, 200_000_000_000n);
+    await mintTo(provider.connection, payer, quoteMint, makerQuote, payer, 50_000_000_000n);
+
+    const userQuoteBefore = await getAccount(provider.connection, userQuote);
+
+    await program.methods
+      .fillExactIn({ ask: {} } as any, new BN("150000000000"), {
+        expireAt,
+        minOutAtoms: new BN(0),
+        levels,
+      })
+      .accounts(buildAccounts())
+      .signers([user, maker])
+      .rpc();
+
+    const userQuoteAfter = await getAccount(provider.connection, userQuote);
+    expect(Number(userQuoteAfter.amount - userQuoteBefore.amount)).to.equal(12_730_000_000);
+  });
+
+  it("Reverts on slippage (min_out_atoms too high)", async () => {
+    const levels = [{ baseAtoms: new BN("100000000000"), quoteAtoms: new BN("8510000000") }];
+    const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
+    try {
+      await program.methods
+        .fillExactIn({ bid: {} } as any, new BN(10), {
+          expireAt,
+          minOutAtoms: new BN(200),
+          levels,
+        })
+        .accounts(buildAccounts())
+        .signers([user, maker])
+        .rpc();
+      expect.fail("expected SlippageExceeded");
+    } catch (e: any) {
+      expect(e.toString()).to.match(/SlippageExceeded|6009/);
+    }
+  });
+
+  it("Reverts when a sibling instruction references the maker base ATA", async () => {
+    const levels = [
+      { baseAtoms: new BN("100000000000"), quoteAtoms: new BN("8510000000") },
+    ];
+    const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
+
+    const fillIx = await program.methods
+      .fillExactIn({ bid: {} } as any, new BN("8510000000"), {
+        expireAt,
+        minOutAtoms: new BN(0),
+        levels,
+      })
+      .accounts(buildAccounts())
+      .instruction();
+
+    const sibling = SystemProgram.transfer({
+      fromPubkey: user.publicKey,
+      toPubkey: makerBase,
+      lamports: 0,
+    });
+
+    const tx = new anchor.web3.Transaction().add(fillIx, sibling);
+    try {
+      await provider.sendAndConfirm(tx, [user, maker]);
+      expect.fail("expected MakerAppearsInOtherInstruction");
+    } catch (e: any) {
+      expect(e.toString()).to.match(/MakerAppearsInOtherInstruction|6005/);
+    }
+  });
 });
