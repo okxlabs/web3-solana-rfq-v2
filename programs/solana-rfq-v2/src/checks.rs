@@ -3,10 +3,18 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions::{
     load_current_index_checked, load_instruction_at_checked,
 };
-use spl_token_2022::extension::{BaseStateWithExtensions, ExtensionType, StateWithExtensions};
+use spl_token_2022::extension::{
+    transfer_fee::TransferFeeConfig, BaseStateWithExtensions, StateWithExtensions,
+};
 use spl_token_2022::state::Mint as Token2022Mint;
 
-/// Reject mints whose Token-2022 extensions break amount-preserving transfer semantics.
+/// Reject only Token-2022 mints whose current-epoch transfer fee is non-zero
+/// (would break amount-preserving sweep math). All other extensions are
+/// accepted; their failure modes are fail-safe under tx atomicity (a hostile
+/// or restrictive extension causes the CPI to fail, which reverts the entire
+/// transaction).
+///
+/// Classic SPL Token (non-2022) mints have no extensions — pass through.
 pub fn check_mint_compatibility(mint_account: &AccountInfo) -> Result<()> {
     if mint_account.owner == &anchor_spl::token::ID {
         return Ok(());
@@ -16,24 +24,13 @@ pub fn check_mint_compatibility(mint_account: &AccountInfo) -> Result<()> {
     let mint = StateWithExtensions::<Token2022Mint>::unpack(&data)
         .map_err(|_| ErrorCode::UnsupportedMintExtension)?;
 
-    let extensions = mint
-        .get_extension_types()
-        .map_err(|_| ErrorCode::UnsupportedMintExtension)?;
-
-    for ext in extensions {
-        match ext {
-            ExtensionType::TransferFeeConfig
-            | ExtensionType::TransferHook
-            | ExtensionType::NonTransferable
-            | ExtensionType::DefaultAccountState
-            | ExtensionType::PermanentDelegate
-            | ExtensionType::ConfidentialTransferMint
-            | ExtensionType::ConfidentialTransferFeeConfig => {
-                return Err(ErrorCode::UnsupportedMintExtension.into());
-            }
-            _ => {}
-        }
+    if let Ok(cfg) = mint.get_extension::<TransferFeeConfig>() {
+        let epoch = Clock::get()?.epoch;
+        let fee = cfg.get_epoch_fee(epoch);
+        let bp: u16 = fee.transfer_fee_basis_points.into();
+        require!(bp == 0, ErrorCode::UnsupportedMintExtension);
     }
+
     Ok(())
 }
 
