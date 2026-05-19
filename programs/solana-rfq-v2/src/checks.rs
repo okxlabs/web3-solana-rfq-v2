@@ -3,10 +3,8 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions::{
     load_current_index_checked, load_instruction_at_checked,
 };
-use spl_token_2022::extension::{
-    transfer_fee::TransferFeeConfig, BaseStateWithExtensions, StateWithExtensions,
-};
-use spl_token_2022::state::Mint as Token2022Mint;
+use anchor_spl::token_interface::get_mint_extension_data;
+use spl_token_2022::extension::transfer_fee::TransferFeeConfig;
 
 /// Reject only Token-2022 mints whose current-epoch transfer fee is non-zero
 /// (would break amount-preserving sweep math). All other extensions are
@@ -15,20 +13,17 @@ use spl_token_2022::state::Mint as Token2022Mint;
 /// transaction).
 ///
 /// Classic SPL Token (non-2022) mints have no extensions — pass through.
-pub fn check_mint_compatibility(mint_account: &AccountInfo) -> Result<()> {
+pub fn check_mint_compatibility(mint_account: &AccountInfo, epoch: u64) -> Result<()> {
     if mint_account.owner == &anchor_spl::token::ID {
         return Ok(());
     }
 
-    let data = mint_account.data.borrow();
-    let mint = StateWithExtensions::<Token2022Mint>::unpack(&data)
-        .map_err(|_| ErrorCode::UnsupportedMintExtension)?;
-
-    if let Ok(cfg) = mint.get_extension::<TransferFeeConfig>() {
-        let epoch = Clock::get()?.epoch;
+    if let Ok(cfg) = get_mint_extension_data::<TransferFeeConfig>(mint_account) {
         let fee = cfg.get_epoch_fee(epoch);
-        let bp: u16 = fee.transfer_fee_basis_points.into();
-        require!(bp == 0, ErrorCode::UnsupportedMintExtension);
+        require!(
+            u16::from(fee.transfer_fee_basis_points) == 0,
+            ErrorCode::UnsupportedMintExtension
+        );
     }
 
     Ok(())

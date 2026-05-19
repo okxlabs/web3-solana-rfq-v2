@@ -44,11 +44,11 @@ pub fn handler(
     require!(amount_in_atoms > 0, ErrorCode::ZeroAmountIn);
     require!(!params.levels.is_empty(), ErrorCode::EmptyLevels);
 
-    let now = Clock::get()?.unix_timestamp;
-    require!(now <= params.expire_at, ErrorCode::StaleOrderbook);
+    let clock = Clock::get()?;
+    require!(clock.unix_timestamp <= params.expire_at, ErrorCode::StaleOrderbook);
 
-    check_mint_compatibility(&ctx.accounts.base_mint.to_account_info())?;
-    check_mint_compatibility(&ctx.accounts.quote_mint.to_account_info())?;
+    check_mint_compatibility(&ctx.accounts.base_mint.to_account_info(), clock.epoch)?;
+    check_mint_compatibility(&ctx.accounts.quote_mint.to_account_info(), clock.epoch)?;
 
     let protected = [
         ctx.accounts.fill_authority.key(),

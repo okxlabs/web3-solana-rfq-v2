@@ -18,7 +18,7 @@ pub enum ErrorCode {
     ZeroAmountIn,
     #[msg("a level has base_atoms == 0 or quote_atoms == 0")]
     DegenerateLevelEntry,
-    #[msg("mint has an extension incompatible with sweep math")]
+    #[msg("Token-2022 mint has non-zero transfer fee or could not be unpacked")]
     UnsupportedMintExtension,
     #[msg("sweep result is below taker's min_out_atoms")]
     SlippageExceeded,
