@@ -3,12 +3,9 @@ use anchor_lang::prelude::*;
 use spl_token_2022::extension::{BaseStateWithExtensions, ExtensionType, StateWithExtensions};
 use spl_token_2022::state::Mint as Token2022Mint;
 
-const SPL_TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
-
 /// Reject mints whose Token-2022 extensions break amount-preserving transfer semantics.
-/// Classic SPL Token mints are 82 bytes and have no extensions — pass through.
 pub fn check_mint_compatibility(mint_account: &AccountInfo) -> Result<()> {
-    if mint_account.owner == &SPL_TOKEN_PROGRAM_ID {
+    if mint_account.owner == &anchor_spl::token::ID {
         return Ok(());
     }
 

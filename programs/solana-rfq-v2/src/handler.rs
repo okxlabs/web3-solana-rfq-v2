@@ -59,19 +59,10 @@ pub fn handler(
     ];
     check_fill_exclusivity(&ctx.accounts.instructions_sysvar, &protected)?;
 
-    let out = match taker_side {
-        Side::Bid => {
-            assert_sorted_bid(&params.levels)?;
-            sweep_bid(amount_in_atoms, params.min_out_atoms, &params.levels)?
-        }
-        Side::Ask => {
-            assert_sorted_ask(&params.levels)?;
-            sweep_ask(amount_in_atoms, params.min_out_atoms, &params.levels)?
-        }
-    };
-
     match taker_side {
         Side::Bid => {
+            assert_sorted_bid(&params.levels)?;
+            let out = sweep_bid(amount_in_atoms, params.min_out_atoms, &params.levels)?;
             transfer_checked(
                 CpiContext::new(
                     ctx.accounts.quote_token_program.to_account_info(),
@@ -100,6 +91,8 @@ pub fn handler(
             )?;
         }
         Side::Ask => {
+            assert_sorted_ask(&params.levels)?;
+            let out = sweep_ask(amount_in_atoms, params.min_out_atoms, &params.levels)?;
             transfer_checked(
                 CpiContext::new(
                     ctx.accounts.base_token_program.to_account_info(),

@@ -8,7 +8,7 @@ use anchor_lang::solana_program::sysvar::instructions::{
 /// *other* top-level instruction of the same transaction.
 pub fn check_fill_exclusivity(
     instructions_sysvar: &AccountInfo,
-    protected: &[Pubkey; 3],
+    protected: &[Pubkey],
 ) -> Result<()> {
     let current = load_current_index_checked(instructions_sysvar)? as usize;
 

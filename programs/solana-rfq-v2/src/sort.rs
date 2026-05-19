@@ -1,23 +1,23 @@
 use crate::error::ErrorCode;
 use crate::state::Level;
 use anchor_lang::prelude::*;
+use core::cmp::Ordering;
 
-pub fn assert_sorted_bid(levels: &[Level]) -> Result<()> {
+fn assert_sorted(levels: &[Level], expected: Ordering) -> Result<()> {
     for w in levels.windows(2) {
         let lhs = (w[0].quote_atoms as u128) * (w[1].base_atoms as u128);
         let rhs = (w[1].quote_atoms as u128) * (w[0].base_atoms as u128);
-        require!(lhs < rhs, ErrorCode::InvalidLevelOrdering);
+        require!(lhs.cmp(&rhs) == expected, ErrorCode::InvalidLevelOrdering);
     }
     Ok(())
 }
 
+pub fn assert_sorted_bid(levels: &[Level]) -> Result<()> {
+    assert_sorted(levels, Ordering::Less)
+}
+
 pub fn assert_sorted_ask(levels: &[Level]) -> Result<()> {
-    for w in levels.windows(2) {
-        let lhs = (w[0].quote_atoms as u128) * (w[1].base_atoms as u128);
-        let rhs = (w[1].quote_atoms as u128) * (w[0].base_atoms as u128);
-        require!(lhs > rhs, ErrorCode::InvalidLevelOrdering);
-    }
-    Ok(())
+    assert_sorted(levels, Ordering::Greater)
 }
 
 #[cfg(test)]
