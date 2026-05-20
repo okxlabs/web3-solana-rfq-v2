@@ -30,7 +30,7 @@ const USDC_DEVNET = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
 );
 const DEFAULT_PROGRAM_ID = new PublicKey(
-  "2NWeqNzPxecVfGsA2fVSVa6ZQKiCWWUAJ7w8fDPej3n8",
+  "RFQ27dg5gSha2cDzQxuGyhfkz5CK2fUSy3Sjw4Rptyj",
 );
 
 type ClusterName = "mainnet" | "devnet" | "localnet";

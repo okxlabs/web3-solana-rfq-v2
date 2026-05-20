@@ -9,7 +9,7 @@ pub mod types;
 use crate::handler::*;
 use crate::types::{FillExactInParams, Side};
 
-declare_id!("2NWeqNzPxecVfGsA2fVSVa6ZQKiCWWUAJ7w8fDPej3n8");
+declare_id!("RFQ27dg5gSha2cDzQxuGyhfkz5CK2fUSy3Sjw4Rptyj");
 
 #[program]
 pub mod solana_rfq_v2 {
