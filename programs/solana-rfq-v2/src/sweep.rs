@@ -276,7 +276,7 @@ mod proofs {
         level
     }
 
-    /// §7: single-level partial fill loses < 1 output atom to integer division.
+    /// §7: bid partial fill loses < 1 output atom to integer division.
     ///
     /// Real-valued ideal:   ideal_out  = amount_in × base / quote
     /// Integer actual:      actual_out = floor(ideal_out)
@@ -290,12 +290,110 @@ mod proofs {
         kani::assume(amount_in > 0);
         kani::assume(amount_in < level.quote_atoms);
 
-        let levels = vec![level];
+        let levels = [level];
         if let Ok(actual_out) = sweep_bid(amount_in, 0, &levels) {
             let numerator = (amount_in as u128) * (level.base_atoms as u128);
             let used = (actual_out as u128) * (level.quote_atoms as u128);
             assert!(numerator >= used);
             assert!(numerator - used < level.quote_atoms as u128);
         }
+    }
+
+    /// §7: ask partial fill — mirror of bid_partial_dust_below_one_atom.
+    /// Invariant: amount_in × quote − out × base < base.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn ask_partial_dust_below_one_atom() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        kani::assume(amount_in > 0);
+        kani::assume(amount_in < level.base_atoms);
+
+        let levels = [level];
+        if let Ok(actual_out) = sweep_ask(amount_in, 0, &levels) {
+            let numerator = (amount_in as u128) * (level.quote_atoms as u128);
+            let used = (actual_out as u128) * (level.base_atoms as u128);
+            assert!(numerator >= used);
+            assert!(numerator - used < level.base_atoms as u128);
+        }
+    }
+
+    /// §5: bid full-consume single level — output is exactly the level's base.
+    /// Pins the `remaining >= level.quote_atoms` branch: no rounding loss.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn bid_full_consume_single_exact() {
+        let level = any_valid_level();
+        let levels = [level];
+        if let Ok(out) = sweep_bid(level.quote_atoms, 0, &levels) {
+            assert!(out == level.base_atoms);
+        }
+    }
+
+    /// §5: ask full-consume single level — symmetric.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn ask_full_consume_single_exact() {
+        let level = any_valid_level();
+        let levels = [level];
+        if let Ok(out) = sweep_ask(level.base_atoms, 0, &levels) {
+            assert!(out == level.quote_atoms);
+        }
+    }
+
+    /// §5.4 contract: Ok(out) implies out >= min_out_atoms.
+    /// Trusts the function's slippage gate across every return path.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn bid_slippage_postcondition() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        let min_out: u64 = kani::any();
+        let levels = [level];
+        if let Ok(out) = sweep_bid(amount_in, min_out, &levels) {
+            assert!(out >= min_out);
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn ask_slippage_postcondition() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        let min_out: u64 = kani::any();
+        let levels = [level];
+        if let Ok(out) = sweep_ask(amount_in, min_out, &levels) {
+            assert!(out >= min_out);
+        }
+    }
+
+    /// §7 anti-dust guard: a single-level partial fill that rounds to zero
+    /// output atoms must reject with InsufficientLiquidity, not silently
+    /// consume input. Probed via the structural witness amount × base < quote
+    /// (bid) or amount × quote < base (ask).
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn bid_partial_zero_rejected() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        kani::assume(amount_in > 0);
+        kani::assume(amount_in < level.quote_atoms);
+        kani::assume((amount_in as u128) * (level.base_atoms as u128) < level.quote_atoms as u128);
+
+        let levels = [level];
+        assert!(sweep_bid(amount_in, 0, &levels).is_err());
+    }
+
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn ask_partial_zero_rejected() {
+        let level = any_valid_level();
+        let amount_in: u64 = kani::any();
+        kani::assume(amount_in > 0);
+        kani::assume(amount_in < level.base_atoms);
+        kani::assume((amount_in as u128) * (level.quote_atoms as u128) < level.base_atoms as u128);
+
+        let levels = [level];
+        assert!(sweep_ask(amount_in, 0, &levels).is_err());
     }
 }

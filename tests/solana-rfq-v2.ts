@@ -15,6 +15,10 @@ describe("solana-rfq-v2 fill_exact_in", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const provider = anchor.getProvider() as anchor.AnchorProvider;
   const program = anchor.workspace.solanaRfqV2 as Program<SolanaRfqV2>;
+  const [eventAuthority] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("__event_authority")],
+    program.programId,
+  );
 
   let baseMint: anchor.web3.PublicKey;
   let quoteMint: anchor.web3.PublicKey;
@@ -70,6 +74,8 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     baseTokenProgram: TOKEN_PROGRAM_ID,
     quoteTokenProgram: TOKEN_PROGRAM_ID,
     instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+    eventAuthority,
+    program: program.programId,
   });
 
   it("Bid: full consume across two levels, no dust", async () => {
@@ -85,6 +91,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
 
     await program.methods
       .fillExactIn({ bid: {} } as any, amountIn, {
+        rfqId: new BN(1),
         expireAt,
         minOutAtoms: new BN(0),
         levels,
@@ -103,6 +110,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN(85), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(0),
           levels,
@@ -122,6 +130,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN(0), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(0),
           levels,
@@ -140,6 +149,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN(1), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(0),
           levels: [],
@@ -162,6 +172,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN(170), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(0),
           levels,
@@ -191,6 +202,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
 
     await program.methods
       .fillExactIn({ ask: {} } as any, new BN("150000000000"), {
+        rfqId: new BN(1),
         expireAt,
         minOutAtoms: new BN(0),
         levels,
@@ -209,6 +221,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN(10), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(200),
           levels,
@@ -229,6 +242,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     try {
       await program.methods
         .fillExactIn({ bid: {} } as any, new BN("85100000"), {
+          rfqId: new BN(1),
           expireAt,
           minOutAtoms: new BN(0),
           levels,
@@ -253,6 +267,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
 
     const fillIx = await program.methods
       .fillExactIn({ bid: {} } as any, new BN("8510000000"), {
+        rfqId: new BN(1),
         expireAt,
         minOutAtoms: new BN(0),
         levels,

@@ -1,13 +1,14 @@
 use crate::checks::{check_fill_exclusivity, check_mint_compatibility};
 use crate::error::ErrorCode;
 use crate::sweep::{assert_sorted_ask, assert_sorted_bid, sweep_ask, sweep_bid};
-use crate::types::{FillExactInParams, Side};
+use crate::types::{FillExactInEvent, FillExactInParams, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar;
 use anchor_spl::token_interface::{
     transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct FillExactIn<'info> {
     pub user: Signer<'info>,
@@ -80,7 +81,7 @@ pub fn handler(
     ];
     check_fill_exclusivity(&ctx.accounts.instructions_sysvar, &protected)?;
 
-    match taker_side {
+    let amount_out_atoms = match taker_side {
         Side::Bid => {
             assert_sorted_bid(&params.levels)?;
             let out = sweep_bid(amount_in_atoms, params.min_out_atoms, &params.levels)?;
@@ -110,6 +111,7 @@ pub fn handler(
                 out,
                 ctx.accounts.base_mint.decimals,
             )?;
+            out
         }
         Side::Ask => {
             assert_sorted_ask(&params.levels)?;
@@ -140,8 +142,20 @@ pub fn handler(
                 out,
                 ctx.accounts.quote_mint.decimals,
             )?;
+            out
         }
-    }
+    };
+
+    emit_cpi!(FillExactInEvent {
+        rfq_id: params.rfq_id,
+        user: ctx.accounts.user.key(),
+        fill_authority: ctx.accounts.fill_authority.key(),
+        taker_side,
+        base_mint: ctx.accounts.base_mint.key(),
+        quote_mint: ctx.accounts.quote_mint.key(),
+        amount_in_atoms,
+        amount_out_atoms,
+    });
 
     Ok(())
 }
