@@ -14,14 +14,34 @@ pub struct FillExactIn<'info> {
 
     pub fill_authority: Signer<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        token::mint = base_mint,
+        token::authority = user,
+        token::token_program = base_token_program,
+    )]
     pub user_base_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(
+        mut,
+        token::mint = quote_mint,
+        token::authority = user,
+        token::token_program = quote_token_program,
+    )]
     pub user_quote_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        token::mint = base_mint,
+        token::authority = fill_authority,
+        token::token_program = base_token_program,
+    )]
     pub maker_base_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(
+        mut,
+        token::mint = quote_mint,
+        token::authority = fill_authority,
+        token::token_program = quote_token_program,
+    )]
     pub maker_quote_token_account: InterfaceAccount<'info, TokenAccount>,
 
     pub base_mint: InterfaceAccount<'info, Mint>,
@@ -45,7 +65,10 @@ pub fn handler(
     require!(!params.levels.is_empty(), ErrorCode::EmptyLevels);
 
     let clock = Clock::get()?;
-    require!(clock.unix_timestamp <= params.expire_at, ErrorCode::StaleOrderbook);
+    require!(
+        clock.unix_timestamp <= params.expire_at,
+        ErrorCode::StaleOrderbook
+    );
 
     check_mint_compatibility(&ctx.accounts.base_mint.to_account_info(), clock.epoch)?;
     check_mint_compatibility(&ctx.accounts.quote_mint.to_account_info(), clock.epoch)?;

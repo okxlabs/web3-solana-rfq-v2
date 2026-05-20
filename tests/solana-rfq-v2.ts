@@ -26,6 +26,7 @@ describe("solana-rfq-v2 fill_exact_in", () => {
   let userQuote: anchor.web3.PublicKey;
   let makerBase: anchor.web3.PublicKey;
   let makerQuote: anchor.web3.PublicKey;
+  let thirdPartyBase: anchor.web3.PublicKey;
 
   const airdrop = async (pk: anchor.web3.PublicKey, lamports: number) => {
     const sig = await provider.connection.requestAirdrop(pk, lamports);
@@ -46,6 +47,12 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     userQuote = await createAssociatedTokenAccount(provider.connection, payer, quoteMint, user.publicKey);
     makerBase = await createAssociatedTokenAccount(provider.connection, payer, baseMint, maker.publicKey);
     makerQuote = await createAssociatedTokenAccount(provider.connection, payer, quoteMint, maker.publicKey);
+    thirdPartyBase = await createAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      baseMint,
+      Keypair.generate().publicKey,
+    );
 
     await mintTo(provider.connection, payer, quoteMint, userQuote, payer, 100_000_000_000n);
     await mintTo(provider.connection, payer, baseMint, makerBase, payer, 1_000_000_000_000n);
@@ -212,6 +219,29 @@ describe("solana-rfq-v2 fill_exact_in", () => {
       expect.fail("expected SlippageExceeded");
     } catch (e: any) {
       expect(e.toString()).to.match(/SlippageExceeded|6009/);
+    }
+  });
+
+  it("Reverts when user base account is not owned by user", async () => {
+    const levels = [{ baseAtoms: new BN("1000000000"), quoteAtoms: new BN("85100000") }];
+    const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
+
+    try {
+      await program.methods
+        .fillExactIn({ bid: {} } as any, new BN("85100000"), {
+          expireAt,
+          minOutAtoms: new BN(0),
+          levels,
+        })
+        .accounts({
+          ...buildAccounts(),
+          userBaseTokenAccount: thirdPartyBase,
+        })
+        .signers([user, maker])
+        .rpc();
+      expect.fail("expected user base account authority constraint");
+    } catch (e: any) {
+      expect(e.toString()).to.match(/ConstraintTokenOwner|2004/);
     }
   });
 
