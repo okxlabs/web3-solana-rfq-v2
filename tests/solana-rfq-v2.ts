@@ -90,10 +90,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const userBaseBefore = await getAccount(provider.connection, userBase);
 
     await program.methods
-      .fillExactIn({ bid: {} } as any, amountIn, {
+      .fillExactIn({ bid: {} } as any, amountIn, new BN(0), {
         rfqId: new BN(1),
         expireAt,
-        minOutAtoms: new BN(0),
         levels,
       })
       .accounts(buildAccounts())
@@ -109,10 +108,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) - 10);
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN(85), {
+        .fillExactIn({ bid: {} } as any, new BN(85), new BN(0), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(0),
           levels,
         })
         .accounts(buildAccounts())
@@ -129,10 +127,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN(0), {
+        .fillExactIn({ bid: {} } as any, new BN(0), new BN(0), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(0),
           levels,
         })
         .accounts(buildAccounts())
@@ -148,10 +145,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN(1), {
+        .fillExactIn({ bid: {} } as any, new BN(1), new BN(0), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(0),
           levels: [],
         })
         .accounts(buildAccounts())
@@ -171,10 +167,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN(170), {
+        .fillExactIn({ bid: {} } as any, new BN(170), new BN(0), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(0),
           levels,
         })
         .accounts(buildAccounts())
@@ -201,10 +196,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const userQuoteBefore = await getAccount(provider.connection, userQuote);
 
     await program.methods
-      .fillExactIn({ ask: {} } as any, new BN("150000000000"), {
+      .fillExactIn({ ask: {} } as any, new BN("150000000000"), new BN(0), {
         rfqId: new BN(1),
         expireAt,
-        minOutAtoms: new BN(0),
         levels,
       })
       .accounts(buildAccounts())
@@ -220,10 +214,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN(10), {
+        .fillExactIn({ bid: {} } as any, new BN(10), new BN(200), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(200),
           levels,
         })
         .accounts(buildAccounts())
@@ -241,10 +234,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
 
     try {
       await program.methods
-        .fillExactIn({ bid: {} } as any, new BN("85100000"), {
+        .fillExactIn({ bid: {} } as any, new BN("85100000"), new BN(0), {
           rfqId: new BN(1),
           expireAt,
-          minOutAtoms: new BN(0),
           levels,
         })
         .accounts({
@@ -266,10 +258,9 @@ describe("solana-rfq-v2 fill_exact_in", () => {
     const expireAt = new BN(Math.floor(Date.now() / 1000) + 60);
 
     const fillIx = await program.methods
-      .fillExactIn({ bid: {} } as any, new BN("8510000000"), {
+      .fillExactIn({ bid: {} } as any, new BN("8510000000"), new BN(0), {
         rfqId: new BN(1),
         expireAt,
-        minOutAtoms: new BN(0),
         levels,
       })
       .accounts(buildAccounts())

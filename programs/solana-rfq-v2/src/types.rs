@@ -17,7 +17,6 @@ pub struct Level {
 pub struct FillExactInParams {
     pub rfq_id: u64,
     pub expire_at: i64,
-    pub min_out_atoms: u64,
     pub levels: Vec<Level>,
 }
 

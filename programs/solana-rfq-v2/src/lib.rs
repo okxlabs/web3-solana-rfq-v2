@@ -19,8 +19,9 @@ pub mod solana_rfq_v2 {
         ctx: Context<FillExactIn>,
         taker_side: Side,
         amount_in_atoms: u64,
+        min_out_atoms: u64,
         params: FillExactInParams,
     ) -> Result<()> {
-        handler::handler(ctx, taker_side, amount_in_atoms, params)
+        handler::handler(ctx, taker_side, amount_in_atoms, min_out_atoms, params)
     }
 }

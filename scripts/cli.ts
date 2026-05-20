@@ -303,10 +303,9 @@ async function runFill(opts: FillOpts) {
     quoteAtoms: l.quoteAtoms,
   }));
   const builder = program.methods
-    .fillExactIn(side.variant, amountIn, {
+    .fillExactIn(side.variant, amountIn, minOut, {
       rfqId,
       expireAt,
-      minOutAtoms: minOut,
       levels: onchainLevels,
     })
     .accounts({

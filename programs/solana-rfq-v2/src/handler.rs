@@ -60,6 +60,7 @@ pub fn handler(
     ctx: Context<FillExactIn>,
     taker_side: Side,
     amount_in_atoms: u64,
+    min_out_atoms: u64,
     params: FillExactInParams,
 ) -> Result<()> {
     require!(amount_in_atoms > 0, ErrorCode::ZeroAmountIn);
@@ -84,7 +85,7 @@ pub fn handler(
     let amount_out_atoms = match taker_side {
         Side::Bid => {
             assert_sorted_bid(&params.levels)?;
-            let out = sweep_bid(amount_in_atoms, params.min_out_atoms, &params.levels)?;
+            let out = sweep_bid(amount_in_atoms, min_out_atoms, &params.levels)?;
             transfer_checked(
                 CpiContext::new(
                     ctx.accounts.quote_token_program.to_account_info(),
@@ -115,7 +116,7 @@ pub fn handler(
         }
         Side::Ask => {
             assert_sorted_ask(&params.levels)?;
-            let out = sweep_ask(amount_in_atoms, params.min_out_atoms, &params.levels)?;
+            let out = sweep_ask(amount_in_atoms, min_out_atoms, &params.levels)?;
             transfer_checked(
                 CpiContext::new(
                     ctx.accounts.base_token_program.to_account_info(),
