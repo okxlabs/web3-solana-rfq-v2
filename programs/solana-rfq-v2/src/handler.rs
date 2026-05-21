@@ -11,11 +11,14 @@ use anchor_spl::token_interface::{
 };
 use spl_token_2022::extension::transfer_fee::TransferFeeConfig;
 
-/// Reject only Token-2022 mints whose current-epoch transfer fee is non-zero
-/// (would break amount-preserving sweep math). All other extensions are
-/// accepted; their failure modes are fail-safe under tx atomicity (a hostile
-/// or restrictive extension causes the CPI to fail, which reverts the entire
-/// transaction).
+/// Disable the Token-2022 TransferFee extension when its current-epoch fee is
+/// non-zero: the sweep math assumes the atoms debited from the sender equal
+/// the atoms credited to the receiver, and any non-zero transfer fee silently
+/// violates that invariant.
+///
+/// All other Token-2022 extensions pass through. Their failure modes are
+/// fail-safe under tx atomicity — a hostile or restrictive extension causes
+/// the transfer_checked CPI to fail, which reverts the entire transaction.
 ///
 /// Classic SPL Token (non-2022) mints have no extensions — pass through.
 fn check_mint_compatibility(mint_account: &AccountInfo, epoch: u64) -> Result<()> {
@@ -34,8 +37,14 @@ fn check_mint_compatibility(mint_account: &AccountInfo, epoch: u64) -> Result<()
     Ok(())
 }
 
-/// Reject the fill if any of `protected` appears as an account in any
-/// *other* top-level instruction of the same transaction.
+/// Reject if any `protected` key appears in another top-level ix.
+/// Caller program is unconstrained on purpose: the maker signs the tx,
+/// so vetting the wrapper is the maker engine's job (program_id check
+/// + simulate-and-diff on maker balance changes), not this contract's.
+///
+/// SVM forces any indirect use of `protected` to surface in some top-level
+/// ix's metas, so this loop is exhaustive against siblings. The current
+/// ix's inner CPI tree is skipped — that surface is covered off-chain.
 fn check_fill_exclusivity(
     instructions_sysvar: &AccountInfo,
     protected: &[Pubkey],
@@ -208,4 +217,142 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(deprecated)]
+mod tests {
+    use super::*;
+    use anchor_lang::solana_program::sysvar::instructions::{
+        construct_instructions_data, store_current_index, BorrowedAccountMeta, BorrowedInstruction,
+    };
+
+    fn run_exclusivity_check(data: &mut [u8], protected: &[Pubkey]) -> Result<()> {
+        let sysvar_key = sysvar::instructions::ID;
+        let sysvar_owner = sysvar::ID;
+        let mut sysvar_lamports = 0;
+        let account_info = AccountInfo::new(
+            &sysvar_key,
+            false,
+            false,
+            &mut sysvar_lamports,
+            data,
+            &sysvar_owner,
+            false,
+            0,
+        );
+
+        check_fill_exclusivity(&account_info, protected)
+    }
+
+    #[test]
+    fn exclusivity_allows_top_level_rfq() {
+        let maker = Pubkey::new_unique();
+        let ix_data = [];
+        let rfq_ix = BorrowedInstruction {
+            program_id: &crate::ID,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: true,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let mut data = construct_instructions_data(&[rfq_ix]);
+        store_current_index(&mut data, 0);
+
+        let result = run_exclusivity_check(&mut data, &[maker]);
+
+        assert!(result.is_ok(), "top-level RFQ instruction should pass");
+    }
+
+    #[test]
+    fn exclusivity_allows_arbitrary_cpi_wrapper() {
+        let wrapper_program = Pubkey::new_unique();
+        let maker = Pubkey::new_unique();
+        let ix_data = [];
+        let wrapper_ix = BorrowedInstruction {
+            program_id: &wrapper_program,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: true,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let mut data = construct_instructions_data(&[wrapper_ix]);
+        store_current_index(&mut data, 0);
+
+        let result = run_exclusivity_check(&mut data, &[maker]);
+
+        assert!(
+            result.is_ok(),
+            "CPI from any wrapper should pass — caller identity is enforced off-chain"
+        );
+    }
+
+    #[test]
+    fn exclusivity_rejects_sibling_referencing_maker_when_rfq_is_top_level() {
+        let other_program = Pubkey::new_unique();
+        let maker = Pubkey::new_unique();
+        let ix_data = [];
+        let rfq_ix = BorrowedInstruction {
+            program_id: &crate::ID,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: true,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let sibling_ix = BorrowedInstruction {
+            program_id: &other_program,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: false,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let mut data = construct_instructions_data(&[rfq_ix, sibling_ix]);
+        store_current_index(&mut data, 0);
+
+        let result = run_exclusivity_check(&mut data, &[maker]);
+
+        let err = result.expect_err("sibling referencing maker must be rejected");
+        assert!(format!("{err:?}").contains("MakerAppearsInOtherInstruction"));
+    }
+
+    #[test]
+    fn exclusivity_rejects_sibling_referencing_maker_when_cpi_wrapper_is_top_level() {
+        let wrapper_program = Pubkey::new_unique();
+        let other_program = Pubkey::new_unique();
+        let maker = Pubkey::new_unique();
+        let ix_data = [];
+        let wrapper_ix = BorrowedInstruction {
+            program_id: &wrapper_program,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: true,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let sibling_ix = BorrowedInstruction {
+            program_id: &other_program,
+            accounts: vec![BorrowedAccountMeta {
+                pubkey: &maker,
+                is_signer: false,
+                is_writable: false,
+            }],
+            data: &ix_data,
+        };
+        let mut data = construct_instructions_data(&[wrapper_ix, sibling_ix]);
+        store_current_index(&mut data, 0);
+
+        let result = run_exclusivity_check(&mut data, &[maker]);
+
+        let err = result.expect_err("sibling referencing maker must be rejected");
+        assert!(format!("{err:?}").contains("MakerAppearsInOtherInstruction"));
+    }
 }
