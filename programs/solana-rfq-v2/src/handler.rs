@@ -45,10 +45,7 @@ fn check_mint_compatibility(mint_account: &AccountInfo, epoch: u64) -> Result<()
 /// SVM forces any indirect use of `protected` to surface in some top-level
 /// ix's metas, so this loop is exhaustive against siblings. The current
 /// ix's inner CPI tree is skipped — that surface is covered off-chain.
-fn check_fill_exclusivity(
-    instructions_sysvar: &AccountInfo,
-    protected: &[Pubkey],
-) -> Result<()> {
+fn check_fill_exclusivity(instructions_sysvar: &AccountInfo, protected: &[Pubkey]) -> Result<()> {
     let current = load_current_index_checked(instructions_sysvar)? as usize;
 
     let mut idx: usize = 0;
@@ -73,19 +70,9 @@ pub struct FillExactIn<'info> {
 
     pub fill_authority: Signer<'info>,
 
-    #[account(
-        mut,
-        token::mint = base_mint,
-        token::authority = user,
-        token::token_program = base_token_program,
-    )]
+    #[account(mut, token::mint = base_mint, token::token_program = base_token_program)]
     pub user_base_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = quote_mint,
-        token::authority = user,
-        token::token_program = quote_token_program,
-    )]
+    #[account(mut, token::mint = quote_mint, token::token_program = quote_token_program)]
     pub user_quote_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(

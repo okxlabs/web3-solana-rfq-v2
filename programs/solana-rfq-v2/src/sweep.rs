@@ -12,6 +12,11 @@ fn assert_sorted(levels: &[Level], expected: Ordering) -> Result<()> {
     Ok(())
 }
 
+// Partial-fill output is computed with integer division (floor toward zero).
+// The taker therefore receives no more than the continuous-price result, and
+// the residual fraction stays with the maker. Rounding always favours the
+// maker; never the taker.
+
 fn bid_partial_out_atoms(quote_in_atoms: u64, level: Level) -> u128 {
     (quote_in_atoms as u128) * (level.base_atoms as u128) / (level.quote_atoms as u128)
 }
