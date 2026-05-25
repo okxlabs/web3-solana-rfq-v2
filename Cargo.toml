@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "programs/*",
-    "crates/*"
+    "fill-decoder"
 ]
 resolver = "2"
 

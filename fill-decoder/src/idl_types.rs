@@ -1,5 +1,5 @@
 //! Rust mirrors of `dex-solana-v3` wire types, derived from
-//! `crates/fill-decoder/idls/dex_solana_v3.json`.
+//! `fill-decoder/idls/dex_solana_v3.json`.
 //!
 //! Only the types needed to walk swap entrypoint args + locate `Dex::SolRfqV2`
 //! routes are modeled. The `Dex` enum uses a custom `BorshDeserialize` impl
@@ -54,7 +54,7 @@ impl BorshDeserialize for Dex {
     fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
         let tag = u8::deserialize_reader(reader)?;
         // Variant indices and body sizes confirmed against
-        // `crates/fill-decoder/idls/dex_solana_v3.json`.
+        // `fill-decoder/idls/dex_solana_v3.json`.
         let body_bytes: usize = match tag {
             64 => 50,  // SolRfq: 6×u64 + 2×bool
             74 | 75 => 2,  // SugarMoneyBuy/Sell: 2×u8
