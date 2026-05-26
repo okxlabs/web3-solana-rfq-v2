@@ -257,6 +257,7 @@ mod tests {
             accounts: accs,
             data: vec![],
             fills: if with_fill { vec![fake_fill()] } else { vec![] },
+            entrypoint: None,
         }
     }
 

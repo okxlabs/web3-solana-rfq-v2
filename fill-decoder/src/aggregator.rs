@@ -9,7 +9,7 @@
 //! 3. For each route whose `dex == Dex::SolRfqV2`, emit a [`DecodedFill`]
 //!    carrying the variant body (`rfq_id`, `expire_at`, `levels`).
 
-use crate::idl_types::{decode_swap_args, Dex};
+use crate::idl_types::{decode_swap_args, Dex, EntrypointKind};
 use crate::transaction::DecodedInstruction;
 use crate::types::{DecodedFill, Side};
 
@@ -53,7 +53,7 @@ pub(crate) const LEG_BASE_MINT: usize = 7;
 pub(crate) const LEG_QUOTE_MINT: usize = 8;
 pub(crate) const SOL_RFQ_V2_LEG_WIDTH: usize = 13;
 
-/// Base-58 form of the canonical `dex-solana-v3` program id.
+/// Base-58 form of the canonical `dex-solana-v3` program id (mainnet).
 pub const DEX_SOLANA_V3_PROGRAM_ID_BASE58: &str = "proVF4pMXVaYqmy4NjniPh4pqKNfMmsihgd4wdkCX3u";
 
 /// 32-byte form of `DEX_SOLANA_V3_PROGRAM_ID_BASE58`. Verified by parity test.
@@ -61,6 +61,21 @@ pub const DEX_SOLANA_V3_PROGRAM_ID_BYTES: [u8; 32] = [
     0x0c, 0x42, 0x9b, 0xd7, 0xc1, 0x8f, 0x50, 0xf8, 0x15, 0x6d, 0x9a, 0xfc, 0x1c, 0xdd, 0xe7, 0x2d,
     0xf6, 0x68, 0xd9, 0xab, 0x3b, 0xec, 0xaf, 0x6b, 0x57, 0x0d, 0x57, 0x66, 0x64, 0x5a, 0xd9, 0xc8,
 ];
+
+/// Base-58 form of the `dex-solana-v3` staging program id.
+pub const DEX_SOLANA_V3_PROGRAM_ID_BASE58_STAGING: &str =
+    "preXgyMmsTzkYSyp9ms1EgSQCbp87B84bT8kyB21bbB";
+
+/// 32-byte form of `DEX_SOLANA_V3_PROGRAM_ID_BASE58_STAGING`. Verified by parity test.
+pub const DEX_SOLANA_V3_PROGRAM_ID_BYTES_STAGING: [u8; 32] = [
+    0x0c, 0x42, 0x6f, 0x23, 0x18, 0xca, 0x48, 0x0b, 0xf4, 0x63, 0xc4, 0x9a, 0xb2, 0x3d, 0xab, 0x52,
+    0xc2, 0xe3, 0xba, 0x10, 0x34, 0xd4, 0xfc, 0x68, 0xb3, 0x5c, 0xea, 0xed, 0x6d, 0x2f, 0x48, 0x56,
+];
+
+/// True if `pubkey` is a recognised dex-solana-v3 deployment (mainnet or staging).
+pub fn is_dex_solana_v3_program(pubkey: &[u8; 32]) -> bool {
+    pubkey == &DEX_SOLANA_V3_PROGRAM_ID_BYTES || pubkey == &DEX_SOLANA_V3_PROGRAM_ID_BYTES_STAGING
+}
 
 /// Embedded IDL — the full dex-solana-v3 IDL we Borsh-mirror through
 /// `crate::idl_types`. Exposed for tooling that wants to introspect it.
@@ -140,15 +155,17 @@ impl core::fmt::Display for SwapLegLookupError {
 
 impl std::error::Error for SwapLegLookupError {}
 
-/// Returns one [`DecodedFill`] per `Dex::SolRfqV2` leg in the entrypoint's
-/// `SwapArgs.routes`. Returns an empty Vec when the instruction is not a known
-/// swap entrypoint or carries no SolRfqV2 routes. Legs whose `taker_side`
-/// byte is neither 0 nor 1 are silently skipped (they would revert on chain).
-pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> Vec<DecodedFill> {
+/// Returns the entrypoint kind plus one [`DecodedFill`] per `Dex::SolRfqV2`
+/// leg in the entrypoint's `SwapArgs.routes`. Returns `(None, [])` when the
+/// instruction is not a known swap entrypoint. Legs whose `taker_side` byte
+/// is neither 0 nor 1 are silently skipped (they would revert on chain).
+pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> (Option<EntrypointKind>, Vec<DecodedFill>) {
     let Some(args) = decode_swap_args(data) else {
-        return Vec::new();
+        return (None, Vec::new());
     };
-    args.routes()
+    let kind = args.kind();
+    let fills = args
+        .routes()
         .iter()
         .filter_map(|r| match &r.dex {
             Dex::SolRfqV2 {
@@ -164,7 +181,8 @@ pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> Vec<DecodedFill> {
             }),
             Dex::Other(_) => None,
         })
-        .collect()
+        .collect();
+    (Some(kind), fills)
 }
 
 #[cfg(test)]
@@ -213,6 +231,14 @@ mod tests {
     }
 
     #[test]
+    fn staging_program_id_bytes_match_base58() {
+        let decoded = bs58::decode(DEX_SOLANA_V3_PROGRAM_ID_BASE58_STAGING)
+            .into_vec()
+            .expect("base58 decode of staging dex-solana-v3 program id");
+        assert_eq!(decoded.as_slice(), DEX_SOLANA_V3_PROGRAM_ID_BYTES_STAGING);
+    }
+
+    #[test]
     fn single_solrfqv2_leg_bid() {
         let level = Level {
             base_atoms: 100_000_000_000,
@@ -222,7 +248,8 @@ mod tests {
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 8_510_000_000, vec![route]);
 
-        let fills = decode_solrfqv2_legs(&ix_data);
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        assert_eq!(kind, Some(EntrypointKind::Concrete));
         assert_eq!(fills.len(), 1);
         let f = &fills[0];
         assert_eq!(f.taker_side, Side::Bid);
@@ -241,7 +268,7 @@ mod tests {
         );
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 100, vec![route]);
-        let fills = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data);
         assert_eq!(fills[0].taker_side, Side::Ask);
     }
 
@@ -251,7 +278,9 @@ mod tests {
         let dex = encode_sol_rfq_v2_variant(2, 42, 2_000_000_000, &[]);
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 100, vec![route]);
-        assert!(decode_solrfqv2_legs(&ix_data).is_empty());
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        assert_eq!(kind, Some(EntrypointKind::Concrete));
+        assert!(fills.is_empty());
     }
 
     #[test]
@@ -261,7 +290,7 @@ mod tests {
         let r1 = encode_route(&dex1, 3_000, 0x01);
         let r2 = encode_route(&dex2, 7_000, 0x02);
         let ix_data = encode_swap_args_ix(entrypoint::PROXY_SWAP, 9, 10_000, vec![r1, r2]);
-        let fills = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data);
         assert_eq!(fills.len(), 2);
         assert_eq!(fills[0].taker_side, Side::Bid);
         assert_eq!(fills[0].rfq_id, 1);
@@ -281,7 +310,7 @@ mod tests {
         let r2 = encode_route(&dex_v2, 5_000, 0x02);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![r1, r2]);
 
-        let fills = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data);
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }
@@ -304,7 +333,8 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&route);
 
-        let fills = decode_solrfqv2_legs(&bytes);
+        let (kind, fills) = decode_solrfqv2_legs(&bytes);
+        assert_eq!(kind, Some(EntrypointKind::TokenLedger));
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }
@@ -312,6 +342,8 @@ mod tests {
     #[test]
     fn unknown_entrypoint_returns_empty() {
         let ix_data = encode_swap_args_ix([0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0], 0, 0, vec![]);
-        assert!(decode_solrfqv2_legs(&ix_data).is_empty());
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        assert_eq!(kind, None);
+        assert!(fills.is_empty());
     }
 }

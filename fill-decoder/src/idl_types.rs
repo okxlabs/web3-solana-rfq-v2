@@ -133,6 +133,35 @@ impl AnySwapArgs {
             AnySwapArgs::TokenLedger(a) => &a.routes,
         }
     }
+
+    pub fn kind(&self) -> EntrypointKind {
+        match self {
+            AnySwapArgs::Concrete(_) => EntrypointKind::Concrete,
+            AnySwapArgs::TokenLedger(_) => EntrypointKind::TokenLedger,
+        }
+    }
+}
+
+/// Which `SwapArgs` shape an aggregator instruction used.
+///
+/// `Concrete` entrypoints carry `amount_in` directly in the instruction data.
+/// `TokenLedger` entrypoints derive `amount_in` from an on-chain "token ledger"
+/// account populated by an earlier instruction in the same transaction, so the
+/// maker cannot bound the consumed amount from the args alone and the ix can
+/// be composed atomically with other swaps. See [`crate::DecodedInstruction::entrypoint`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntrypointKind {
+    Concrete,
+    TokenLedger,
+}
+
+impl core::fmt::Display for EntrypointKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EntrypointKind::Concrete => f.write_str("Concrete"),
+            EntrypointKind::TokenLedger => f.write_str("TokenLedger"),
+        }
+    }
 }
 
 /// Match the first 8 bytes of an instruction's data against the known swap

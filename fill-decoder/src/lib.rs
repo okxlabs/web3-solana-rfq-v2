@@ -44,20 +44,23 @@ mod aggregator;
 use base64::Engine;
 
 pub use aggregator::{
-    SwapLegLookupError, AGGREGATOR_IDL_JSON, DEX_SOLANA_V3_PROGRAM_ID_BASE58,
-    DEX_SOLANA_V3_PROGRAM_ID_BYTES, RFQ_V2_PROGRAM_ID_BASE58, RFQ_V2_PROGRAM_ID_BYTES,
+    is_dex_solana_v3_program, SwapLegLookupError, AGGREGATOR_IDL_JSON,
+    DEX_SOLANA_V3_PROGRAM_ID_BASE58, DEX_SOLANA_V3_PROGRAM_ID_BASE58_STAGING,
+    DEX_SOLANA_V3_PROGRAM_ID_BYTES, DEX_SOLANA_V3_PROGRAM_ID_BYTES_STAGING,
+    RFQ_V2_PROGRAM_ID_BASE58, RFQ_V2_PROGRAM_ID_BYTES,
 };
 pub use error::{FillDecoderError, Result};
 pub use exclusivity::{
     all_pubkeys_exclusive, all_pubkeys_exclusive_base58, check_pubkey_exclusivity,
     check_pubkey_exclusivity_base58, parse_pubkey_base58, ExclusivityReport,
 };
+pub use idl_types::EntrypointKind;
 pub use transaction::{
     AddressLookupTableEntry, DecodedInstruction, DecodedMessage, DecodedTransaction,
     MintPairMismatch, ResolvedAccount, SwapLegAccounts, SwapLegError,
 };
 pub use types::{DecodedFill, FillCountError, Level, PriceQty, Side};
-pub use wire::MessageVersion;
+pub use wire::{AddressTableLookup, MessageVersion};
 
 /// The Anchor IDL for the `solana-rfq-v2` program, embedded at compile time.
 pub const IDL_JSON: &str = include_str!("../idls/solana_rfq_v2.json");
@@ -113,8 +116,10 @@ fn base64_decode(b64: &str) -> Result<Vec<u8>> {
 /// attach any SolRfqV2 legs found in its `SwapArgs.routes`.
 fn extract_fills(msg: &mut DecodedMessage) {
     for ix in msg.instructions.iter_mut() {
-        if ix.program_id.pubkey == DEX_SOLANA_V3_PROGRAM_ID_BYTES {
-            ix.fills = aggregator::decode_solrfqv2_legs(&ix.data);
+        if is_dex_solana_v3_program(&ix.program_id.pubkey) {
+            let (kind, fills) = aggregator::decode_solrfqv2_legs(&ix.data);
+            ix.entrypoint = kind;
+            ix.fills = fills;
         }
     }
 }

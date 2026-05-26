@@ -6,6 +6,7 @@ use crate::aggregator::{
     LEG_FILL_AUTHORITY, LEG_MAKER_BASE_TOKEN_ACCOUNT, LEG_MAKER_QUOTE_TOKEN_ACCOUNT, LEG_PROGRAM_ID,
     LEG_QUOTE_MINT, LEG_SOURCE_TOKEN_ACCOUNT, LEG_SWAP_AUTHORITY,
 };
+use crate::idl_types::EntrypointKind;
 use crate::types::{DecodedFill, FillCountError};
 use crate::wire::{
     AddressTableLookup, CompiledInstruction, MessageHeader, MessageVersion, ParsedMessage,
@@ -49,6 +50,10 @@ pub struct DecodedInstruction {
     /// SolRfqV2 legs discovered inside this instruction. Empty for non-aggregator
     /// instructions, or aggregator swap instructions that carry no RFQ leg.
     pub fills: Vec<DecodedFill>,
+    /// Which dex-solana-v3 swap entrypoint this instruction used, when the
+    /// program is a recognised aggregator deployment and the discriminator matched.
+    /// `None` for non-aggregator instructions or unrecognised entrypoints.
+    pub entrypoint: Option<EntrypointKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +89,21 @@ impl DecodedMessage {
     /// Total number of SolRfqV2 legs across all top-level instructions.
     pub fn fill_count(&self) -> usize {
         self.instructions.iter().map(|ix| ix.fills.len()).sum()
+    }
+
+    /// `true` if any SolRfqV2 leg in this message rides inside a token-ledger
+    /// entrypoint (`SWAP_TOB_WITH_TOKEN_LEDGER`,
+    /// `SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER`).
+    ///
+    /// Token-ledger entrypoints derive `amount_in` from an on-chain account
+    /// populated by an earlier instruction in the same transaction. That makes
+    /// the consumed amount opaque from args alone and lets the taker compose
+    /// the RFQ fill atomically with other swaps for arbitrage. The conservative
+    /// maker policy is to refuse-to-sign when this returns `true`.
+    pub fn has_token_ledger_fill(&self) -> bool {
+        self.instructions
+            .iter()
+            .any(|ix| !ix.fills.is_empty() && ix.entrypoint == Some(EntrypointKind::TokenLedger))
     }
 
     /// Returns the single SolRfqV2 leg if exactly one is present in the
@@ -254,6 +274,11 @@ impl DecodedTransaction {
         self.message.fill_count()
     }
 
+    /// See [`DecodedMessage::has_token_ledger_fill`].
+    pub fn has_token_ledger_fill(&self) -> bool {
+        self.message.has_token_ledger_fill()
+    }
+
     /// See [`DecodedMessage::single_fill`].
     pub fn single_fill(&self) -> Result<&DecodedFill, FillCountError> {
         self.message.single_fill()
@@ -350,6 +375,7 @@ fn build_instruction(
         accounts,
         data: ix.data,
         fills: Vec::new(),
+        entrypoint: None,
     }
 }
 
@@ -378,6 +404,13 @@ mod tests {
     }
 
     fn ix_with(fills: Vec<DecodedFill>) -> DecodedInstruction {
+        ix_with_ep(fills, None)
+    }
+
+    fn ix_with_ep(
+        fills: Vec<DecodedFill>,
+        entrypoint: Option<EntrypointKind>,
+    ) -> DecodedInstruction {
         DecodedInstruction {
             instruction_index: 0,
             program_id: ResolvedAccount {
@@ -387,6 +420,7 @@ mod tests {
             accounts: vec![],
             data: vec![],
             fills,
+            entrypoint,
         }
     }
 
@@ -412,6 +446,26 @@ mod tests {
         let f = m.single_fill().expect("one fill");
         assert_eq!(f.rfq_id, 42);
         assert_eq!(m.fill_count(), 1);
+    }
+
+    #[test]
+    fn token_ledger_fill_is_flagged() {
+        let m = msg_with(vec![ix_with_ep(vec![fill(1)], Some(EntrypointKind::TokenLedger))]);
+        assert!(m.has_token_ledger_fill());
+    }
+
+    #[test]
+    fn concrete_entrypoint_does_not_flag() {
+        let m = msg_with(vec![ix_with_ep(vec![fill(1)], Some(EntrypointKind::Concrete))]);
+        assert!(!m.has_token_ledger_fill());
+    }
+
+    #[test]
+    fn token_ledger_ix_without_fills_does_not_flag() {
+        // A token-ledger ix that carries no SolRfqV2 leg doesn't put the maker
+        // at risk; the gate is specifically about RFQ legs being consumed.
+        let m = msg_with(vec![ix_with_ep(vec![], Some(EntrypointKind::TokenLedger))]);
+        assert!(!m.has_token_ledger_fill());
     }
 
     #[test]
@@ -477,6 +531,7 @@ mod tests {
             accounts,
             data: vec![],
             fills,
+            entrypoint: None,
         }
     }
 
