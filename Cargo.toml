@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "programs/*"
+    "programs/*",
+    "fill-decoder"
 ]
 resolver = "2"
 

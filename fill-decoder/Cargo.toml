@@ -1,0 +1,32 @@
+[package]
+name = "fill-decoder"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Off-chain decoder for OKX dex-solana-v3 transactions; extracts embedded solana-rfq-v2 RFQ legs for maker quote inspection."
+
+[lib]
+name = "fill_decoder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "decode-tx"
+path = "src/bin/decode_tx.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+# Pulls in CLI deps (clap, reqwest, tokio, serde_json). Lib stays minimal without it.
+cli = ["clap", "reqwest", "tokio", "serde_json"]
+
+[dependencies]
+borsh = { version = "1", features = ["derive"] }
+bs58 = "0.5"
+base64 = "0.21"
+thiserror = "1"
+
+# CLI-only deps (optional, gated by the `cli` feature).
+clap = { version = "4", features = ["derive", "env"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+serde_json = { version = "1", optional = true }
