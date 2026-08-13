@@ -293,4 +293,4 @@ cargo test --features cli   # + CLI build, 47 tests total
 
 ## License
 
-Apache-2.0
+MIT

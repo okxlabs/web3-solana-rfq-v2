@@ -2,7 +2,7 @@
 name = "fill-decoder"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 description = "Off-chain decoder for OKX dex-solana-v3 transactions; extracts embedded solana-rfq-v2 RFQ legs for maker quote inspection."
 
 [lib]
