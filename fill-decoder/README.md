@@ -290,7 +290,3 @@ No `solana-sdk`, no curve25519, no async at the library boundary. The CLI featur
 cargo test                  # lib only
 cargo test --features cli   # + CLI build, 47 tests total
 ```
-
-## License
-
-MIT
