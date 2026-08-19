@@ -186,8 +186,14 @@ mod tests {
             rfq_id: 1,
             expire_at: 0,
             levels: vec![
-                Level { base_atoms: 1_000_000_000, quote_atoms: 85_000_000 },
-                Level { base_atoms: 2_000_000_000, quote_atoms: 172_000_000 },
+                Level {
+                    base_atoms: 1_000_000_000,
+                    quote_atoms: 85_000_000,
+                },
+                Level {
+                    base_atoms: 2_000_000_000,
+                    quote_atoms: 172_000_000,
+                },
             ],
         };
         let pqs = f.levels_price_qty(9, 6);

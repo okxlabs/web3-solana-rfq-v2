@@ -1,181 +1,259 @@
-//! Cross-instruction exclusivity check for the maker's sensitive accounts.
+//! Static-index validation for the maker accounts protected by SolRfqV2.
 //!
-//! A maker about to sign an OKX-aggregator transaction wants to confirm that
-//! its sensitive pubkeys — `fill_authority`, `maker_base_token_account`,
-//! `maker_quote_token_account` — appear **exactly once** in the whole
-//! transaction, and that the single occurrence is inside a `dex-solana-v3`
-//! swap instruction that actually carries a SolRfqV2 leg.
-//!
-//! The single result type is [`ExclusivityReport`] (flat struct, like the
-//! reference SDK at `rfq-v2-sdk/fill-decoder`). It carries the queried
-//! pubkey, the resolved-reference count, and the per-instruction index lists
-//! so callers can both ask "is it safe?" and inspect the details.
-//!
-//! ## Failure modes (collapsed into `is_exclusive() == false`)
-//!
-//! - The pubkey is absent (`confirmed_count == 0`).
-//! - The pubkey is referenced in a sibling, non-fill-bearing instruction.
-//! - The pubkey is referenced more than once across the message (duplicate
-//!   use the maker did not pre-sign for).
-//! - A non-fill instruction has unresolved ALT entries that could be the
-//!   queried pubkey — fail closed.
-//!
-//! ## Scope
-//!
-//! - Walks **top-level** instructions only. Inner CPIs are out of scope.
-//! - Pubkey-keyed: the caller supplies their own `fill_authority` /
-//!   `maker_*_token_account` pubkeys.
-//!
-//! ## Not covered
-//!
-//! - Taker token accounts. Those sit at adapter-specific offsets inside the
-//!   aggregator's `remaining_accounts`; recovering them would require
-//!   modelling every dex-solana-v3 adapter's account width. Out of scope.
-//! - Intra-fill misuse via routes the maker did not pre-sign. The maker
-//!   must additionally verify every decoded `rfq_id` against its quote
-//!   registry.
+//! ALT contents are intentionally not loaded. For an executable v0 message,
+//! a pubkey cannot occur in both the static and dynamically loaded regions:
+//! Solana rejects the duplicate with `AccountLoadedTwice`. We therefore prove
+//! maker-account exclusivity from their static indices and require the RFQ
+//! program id to be static as a trustworthy leg-slice anchor.
 
+use crate::aggregator::{
+    LEG_FILL_AUTHORITY, LEG_MAKER_BASE_TOKEN_ACCOUNT, LEG_MAKER_QUOTE_TOKEN_ACCOUNT,
+    LEG_PROGRAM_ID, SOL_RFQ_V2_LEG_WIDTH,
+};
 use crate::error::{FillDecoderError, Result};
-use crate::transaction::{DecodedMessage, ResolvedAccount};
+use crate::transaction::DecodedMessage;
+use crate::types::FillCountError;
+use crate::RFQ_V2_PROGRAM_ID_BYTES;
 use std::fmt;
+use thiserror::Error;
 
-/// Outcome of checking one pubkey against a decoded message.
-///
-/// Flat struct rather than an enum so callers can read individual fields
-/// without pattern matching, and so [`fmt::Display`] can produce a complete
-/// human-readable line on its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExclusivityReport {
-    /// The pubkey that was checked. Use [`ExclusivityReport::pubkey_base58`]
-    /// to format it for display.
-    pub pubkey: [u8; 32],
-    /// Number of resolved references found across the whole message
-    /// (program_id position counts, each account_meta entry counts once).
-    pub confirmed_count: usize,
-    /// Indices of top-level instructions that reference the pubkey AND
-    /// contain at least one decoded SolRfqV2 leg.
-    pub fill_ix_indices: Vec<usize>,
-    /// Indices of top-level instructions that reference the pubkey but
-    /// contain no decoded SolRfqV2 legs.
-    pub non_fill_ix_indices: Vec<usize>,
-    /// Indices of top-level instructions that have at least one unresolved
-    /// ALT entry (could be this pubkey — fail closed).
-    pub ix_with_unresolved: Vec<usize>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MakerAccounts {
+    pub fill_authority: [u8; 32],
+    pub maker_base_token_account: [u8; 32],
+    pub maker_quote_token_account: [u8; 32],
 }
 
-impl ExclusivityReport {
-    /// `true` iff the pubkey is referenced exactly once, in a fill-bearing
-    /// instruction, with no ambiguity from unresolved ALT entries.
-    pub fn is_exclusive(&self) -> bool {
-        self.confirmed_count == 1
-            && self.non_fill_ix_indices.is_empty()
-            && self.ix_with_unresolved.is_empty()
-    }
-
-    /// Base58 form of the queried pubkey.
-    pub fn pubkey_base58(&self) -> String {
-        bs58::encode(&self.pubkey).into_string()
+impl MakerAccounts {
+    fn pubkeys(&self) -> [[u8; 32]; 3] {
+        [
+            self.fill_authority,
+            self.maker_base_token_account,
+            self.maker_quote_token_account,
+        ]
     }
 }
 
-impl fmt::Display for ExclusivityReport {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MakerValidationReport {
+    pub instruction_index: usize,
+    pub leg_offset: usize,
+    pub fill_authority_index: u8,
+    pub maker_base_token_account_index: u8,
+    pub maker_quote_token_account_index: u8,
+    pub rfq_program_index: u8,
+}
+
+impl fmt::Display for MakerValidationReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let pk = self.pubkey_base58();
-        if self.is_exclusive() {
-            return write!(
-                f,
-                "OK {}: exactly one reference, in fill ix {}",
-                pk, self.fill_ix_indices[0]
-            );
-        }
-        let mut reasons: Vec<String> = Vec::new();
-        if self.confirmed_count == 0 && self.ix_with_unresolved.is_empty() {
-            reasons.push("absent (not referenced anywhere)".to_string());
-        }
-        if !self.non_fill_ix_indices.is_empty() {
-            reasons.push(format!(
-                "referenced by non-fill ixs {:?}",
-                self.non_fill_ix_indices
-            ));
-        }
-        if self.confirmed_count > 1 {
-            reasons.push(format!(
-                "duplicate references ({} total)",
-                self.confirmed_count
-            ));
-        }
-        if !self.ix_with_unresolved.is_empty() {
-            reasons.push(format!(
-                "unresolved ALT in ixs {:?}",
-                self.ix_with_unresolved
-            ));
-        }
         write!(
             f,
-            "UNSAFE {}: {} (fill ixs: {:?})",
-            pk,
-            reasons.join("; "),
-            self.fill_ix_indices,
+            "OK maker accounts are static, exclusive, and occupy RFQ leg slots 4/5/6 \
+             in instruction {} (leg offset {})",
+            self.instruction_index, self.leg_offset
         )
     }
 }
 
-/// Check `pubkey` against `msg`.
-pub fn check_pubkey_exclusivity(msg: &DecodedMessage, pubkey: &[u8; 32]) -> ExclusivityReport {
-    let mut confirmed_count: usize = 0;
-    let mut fill_ix_indices = Vec::new();
-    let mut non_fill_ix_indices = Vec::new();
-    let mut ix_with_unresolved = Vec::new();
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum MakerValidationError {
+    #[error("maker account pubkeys must be distinct")]
+    KeysNotDistinct,
 
+    #[error("{role} is not present in staticAccountKeys")]
+    NotStatic { role: &'static str },
+
+    #[error("{role} appears more than once in staticAccountKeys")]
+    DuplicateStaticKey { role: &'static str },
+
+    #[error("fill_authority static index {index} is outside the signer range")]
+    FillAuthorityNotSigner { index: u8 },
+
+    #[error("{role} static index {index} is not writable")]
+    TokenAccountNotWritable { role: &'static str, index: u8 },
+
+    #[error("RFQ_V2_PROGRAM_ID is not present in staticAccountKeys")]
+    RfqProgramNotStatic,
+
+    #[error("RFQ_V2_PROGRAM_ID appears more than once in staticAccountKeys")]
+    DuplicateRfqProgramStaticKey,
+
+    #[error(transparent)]
+    FillCount(#[from] FillCountError),
+
+    #[error("{role} is referenced {count} times; expected exactly once")]
+    ReferenceCount { role: &'static str, count: usize },
+
+    #[error("RFQ_V2_PROGRAM_ID is referenced {count} times; expected exactly once")]
+    RfqProgramReferenceCount { count: usize },
+
+    #[error("the unique SolRfqV2 fill instruction does not contain the expected static RFQ leg")]
+    LegNotFound,
+
+    #[error("the fill instruction contains multiple matching RFQ leg slices")]
+    MultipleLegMatches,
+}
+
+const MAKER_ROLES: [&str; 3] = [
+    "fill_authority",
+    "maker_base_token_account",
+    "maker_quote_token_account",
+];
+
+/// Validate the maker's three protected accounts without resolving ALT data.
+///
+/// This proves safety under execute-or-fail semantics: if an ALT loads one of
+/// these already-static pubkeys, the runtime rejects the transaction before
+/// execution with `AccountLoadedTwice`.
+pub fn validate_maker_accounts(
+    msg: &DecodedMessage,
+    maker: &MakerAccounts,
+) -> core::result::Result<MakerValidationReport, MakerValidationError> {
+    let maker_pubkeys = maker.pubkeys();
+    if maker_pubkeys[0] == maker_pubkeys[1]
+        || maker_pubkeys[0] == maker_pubkeys[2]
+        || maker_pubkeys[1] == maker_pubkeys[2]
+    {
+        return Err(MakerValidationError::KeysNotDistinct);
+    }
+
+    let maker_indices = [
+        unique_static_index(msg, &maker_pubkeys[0], MAKER_ROLES[0])?,
+        unique_static_index(msg, &maker_pubkeys[1], MAKER_ROLES[1])?,
+        unique_static_index(msg, &maker_pubkeys[2], MAKER_ROLES[2])?,
+    ];
+
+    if maker_indices[0] >= msg.header.num_required_signatures {
+        return Err(MakerValidationError::FillAuthorityNotSigner {
+            index: maker_indices[0],
+        });
+    }
+    for (role, index) in MAKER_ROLES[1..].iter().zip(maker_indices[1..].iter()) {
+        if !static_key_is_writable(msg, *index) {
+            return Err(MakerValidationError::TokenAccountNotWritable {
+                role,
+                index: *index,
+            });
+        }
+    }
+
+    let rfq_program_index = unique_rfq_program_index(msg)?;
+    msg.single_fill().map_err(MakerValidationError::from)?;
+    let fill_ix = msg
+        .instructions
+        .iter()
+        .find(|ix| !ix.fills.is_empty())
+        .ok_or(MakerValidationError::FillCount(FillCountError::NotFound))?;
+
+    let tracked = [
+        maker_indices[0],
+        maker_indices[1],
+        maker_indices[2],
+        rfq_program_index,
+    ];
+    let mut counts = [0usize; 4];
     for ix in &msg.instructions {
-        let refs = count_pubkey_refs(&ix.program_id, &ix.accounts, pubkey);
-        if refs > 0 {
-            confirmed_count += refs;
-            if ix.fills.is_empty() {
-                non_fill_ix_indices.push(ix.instruction_index);
-            } else {
-                fill_ix_indices.push(ix.instruction_index);
+        for index in std::iter::once(&ix.program_id_index).chain(ix.account_indices.iter()) {
+            for (position, tracked_index) in tracked.iter().enumerate() {
+                if index == tracked_index {
+                    counts[position] += 1;
+                }
             }
         }
-        if ix_has_unresolved(&ix.program_id, &ix.accounts) {
-            ix_with_unresolved.push(ix.instruction_index);
+    }
+    for i in 0..3 {
+        if counts[i] != 1 {
+            return Err(MakerValidationError::ReferenceCount {
+                role: MAKER_ROLES[i],
+                count: counts[i],
+            });
         }
     }
-
-    ExclusivityReport {
-        pubkey: *pubkey,
-        confirmed_count,
-        fill_ix_indices,
-        non_fill_ix_indices,
-        ix_with_unresolved,
+    if counts[3] != 1 {
+        return Err(MakerValidationError::RfqProgramReferenceCount { count: counts[3] });
     }
+
+    let expected_slots = [
+        (LEG_PROGRAM_ID, rfq_program_index),
+        (LEG_FILL_AUTHORITY, maker_indices[0]),
+        (LEG_MAKER_BASE_TOKEN_ACCOUNT, maker_indices[1]),
+        (LEG_MAKER_QUOTE_TOKEN_ACCOUNT, maker_indices[2]),
+    ];
+    let mut matches = (0..=fill_ix
+        .account_indices
+        .len()
+        .saturating_sub(SOL_RFQ_V2_LEG_WIDTH))
+        .filter(|&offset| {
+            fill_ix.account_indices.len() >= offset + SOL_RFQ_V2_LEG_WIDTH
+                && expected_slots
+                    .iter()
+                    .all(|&(slot, index)| fill_ix.account_indices[offset + slot] == index)
+        });
+    let leg_offset = matches.next().ok_or(MakerValidationError::LegNotFound)?;
+    if matches.next().is_some() {
+        return Err(MakerValidationError::MultipleLegMatches);
+    }
+
+    Ok(MakerValidationReport {
+        instruction_index: fill_ix.instruction_index,
+        leg_offset,
+        fill_authority_index: maker_indices[0],
+        maker_base_token_account_index: maker_indices[1],
+        maker_quote_token_account_index: maker_indices[2],
+        rfq_program_index,
+    })
 }
 
-/// Convenience: parse `pubkey_base58` and run [`check_pubkey_exclusivity`].
-pub fn check_pubkey_exclusivity_base58(
+fn unique_static_index(
     msg: &DecodedMessage,
-    pubkey_base58: &str,
-) -> Result<ExclusivityReport> {
-    Ok(check_pubkey_exclusivity(msg, &parse_pubkey_base58(pubkey_base58)?))
-}
-
-/// Returns `true` iff every pubkey passes [`ExclusivityReport::is_exclusive`].
-pub fn all_pubkeys_exclusive(msg: &DecodedMessage, pubkeys: &[[u8; 32]]) -> bool {
-    pubkeys
+    pubkey: &[u8; 32],
+    role: &'static str,
+) -> core::result::Result<u8, MakerValidationError> {
+    let mut matches = msg
+        .static_account_keys
         .iter()
-        .all(|pk| check_pubkey_exclusivity(msg, pk).is_exclusive())
+        .enumerate()
+        .filter(|(_, key)| *key == pubkey)
+        .map(|(index, _)| index as u8);
+    let index = matches
+        .next()
+        .ok_or(MakerValidationError::NotStatic { role })?;
+    if matches.next().is_some() {
+        return Err(MakerValidationError::DuplicateStaticKey { role });
+    }
+    Ok(index)
 }
 
-/// Base58 convenience for [`all_pubkeys_exclusive`].
-pub fn all_pubkeys_exclusive_base58(
+fn unique_rfq_program_index(
     msg: &DecodedMessage,
-    pubkeys_base58: &[&str],
-) -> Result<bool> {
-    let parsed: Vec<[u8; 32]> = pubkeys_base58
+) -> core::result::Result<u8, MakerValidationError> {
+    let mut matches = msg
+        .static_account_keys
         .iter()
-        .map(|s| parse_pubkey_base58(s))
-        .collect::<Result<_>>()?;
-    Ok(all_pubkeys_exclusive(msg, &parsed))
+        .enumerate()
+        .filter(|(_, key)| **key == RFQ_V2_PROGRAM_ID_BYTES)
+        .map(|(index, _)| index as u8);
+    let index = matches
+        .next()
+        .ok_or(MakerValidationError::RfqProgramNotStatic)?;
+    if matches.next().is_some() {
+        return Err(MakerValidationError::DuplicateRfqProgramStaticKey);
+    }
+    Ok(index)
+}
+
+fn static_key_is_writable(msg: &DecodedMessage, index: u8) -> bool {
+    let index = index as usize;
+    let required_signatures = msg.header.num_required_signatures as usize;
+    let readonly_signed = msg.header.num_readonly_signed_accounts as usize;
+    let readonly_unsigned = msg.header.num_readonly_unsigned_accounts as usize;
+    let static_len = msg.static_account_keys.len();
+
+    if index < required_signatures {
+        index < required_signatures.saturating_sub(readonly_signed)
+    } else {
+        index < static_len.saturating_sub(readonly_unsigned)
+    }
 }
 
 /// Decode a base58 string to a 32-byte pubkey.
@@ -183,243 +261,147 @@ pub fn parse_pubkey_base58(s: &str) -> Result<[u8; 32]> {
     let bytes = bs58::decode(s)
         .into_vec()
         .map_err(|e| FillDecoderError::Other(format!("invalid base58 pubkey {s:?}: {e}")))?;
-    bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            FillDecoderError::Other(format!(
-                "pubkey {s:?} decoded to {} bytes, expected 32",
-                bytes.len()
-            ))
-        })
-}
-
-fn count_pubkey_refs(
-    program_id: &ResolvedAccount,
-    accounts: &[ResolvedAccount],
-    target: &[u8; 32],
-) -> usize {
-    let prog_hit = (program_id.is_resolved && &program_id.pubkey == target) as usize;
-    let acc_hits = accounts
-        .iter()
-        .filter(|a| a.is_resolved && &a.pubkey == target)
-        .count();
-    prog_hit + acc_hits
-}
-
-fn ix_has_unresolved(program_id: &ResolvedAccount, accounts: &[ResolvedAccount]) -> bool {
-    !program_id.is_resolved || accounts.iter().any(|a| !a.is_resolved)
+    bytes.as_slice().try_into().map_err(|_| {
+        FillDecoderError::Other(format!(
+            "pubkey {s:?} decoded to {} bytes, expected 32",
+            bytes.len()
+        ))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{DecodedInstruction, DecodedMessage};
-    use crate::types::DecodedFill;
+    use crate::transaction::DecodedInstruction;
+    use crate::types::{DecodedFill, Side};
     use crate::wire::{MessageHeader, MessageVersion};
 
-    fn pk(byte: u8) -> [u8; 32] {
-        [byte; 32]
-    }
+    const FILL: [u8; 32] = [1; 32];
+    const BASE: [u8; 32] = [2; 32];
+    const QUOTE: [u8; 32] = [3; 32];
+    const AGG: [u8; 32] = [4; 32];
 
-    fn resolved(byte: u8) -> ResolvedAccount {
-        ResolvedAccount {
-            pubkey: pk(byte),
-            is_resolved: true,
-        }
-    }
-
-    fn unresolved() -> ResolvedAccount {
-        ResolvedAccount {
-            pubkey: [0u8; 32],
-            is_resolved: false,
+    fn maker() -> MakerAccounts {
+        MakerAccounts {
+            fill_authority: FILL,
+            maker_base_token_account: BASE,
+            maker_quote_token_account: QUOTE,
         }
     }
 
     fn fake_fill() -> DecodedFill {
         DecodedFill {
-            taker_side: crate::Side::Bid,
+            taker_side: Side::Bid,
             rfq_id: 1,
             expire_at: 0,
             levels: vec![],
         }
     }
 
-    fn ix(
-        index: usize,
-        program: ResolvedAccount,
-        accs: Vec<ResolvedAccount>,
-        with_fill: bool,
-    ) -> DecodedInstruction {
-        DecodedInstruction {
-            instruction_index: index,
-            program_id: program,
-            accounts: accs,
-            data: vec![],
-            fills: if with_fill { vec![fake_fill()] } else { vec![] },
-            entrypoint: None,
-        }
-    }
-
-    fn msg(ixs: Vec<DecodedInstruction>) -> DecodedMessage {
+    fn valid_message() -> DecodedMessage {
+        let mut accounts = vec![5u8; 16];
+        let offset = 2;
+        accounts[offset + LEG_PROGRAM_ID] = 4;
+        accounts[offset + LEG_FILL_AUTHORITY] = 0;
+        accounts[offset + LEG_MAKER_BASE_TOKEN_ACCOUNT] = 1;
+        accounts[offset + LEG_MAKER_QUOTE_TOKEN_ACCOUNT] = 2;
         DecodedMessage {
-            version: MessageVersion::Legacy,
+            version: MessageVersion::V0,
             header: MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
-                num_readonly_unsigned_accounts: 0,
+                num_readonly_unsigned_accounts: 2,
             },
-            recent_blockhash: [0u8; 32],
-            account_keys: vec![],
-            instructions: ixs,
+            recent_blockhash: [0; 32],
+            static_account_keys: vec![FILL, BASE, QUOTE, AGG, RFQ_V2_PROGRAM_ID_BYTES, [5; 32]],
+            instructions: vec![DecodedInstruction {
+                instruction_index: 0,
+                program_id_index: 3,
+                account_indices: accounts,
+                data: vec![],
+                fills: vec![fake_fill()],
+                entrypoint: None,
+            }],
             address_table_lookups: vec![],
-            unresolved_count: 0,
+            loaded_writable_count: 2,
+            loaded_readonly_count: 2,
         }
     }
 
     #[test]
-    fn exactly_one_hit_in_fill_ix_is_exclusive() {
-        let target = pk(7);
-        let m = msg(vec![
-            ix(0, resolved(1), vec![resolved(7)], true),
-            ix(1, resolved(2), vec![resolved(8)], false),
-        ]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(r.is_exclusive());
-        assert_eq!(r.confirmed_count, 1);
-        assert_eq!(r.fill_ix_indices, vec![0]);
-        assert!(r.non_fill_ix_indices.is_empty());
-        assert!(r.ix_with_unresolved.is_empty());
+    fn accepts_exact_static_rfq_slots_without_alt_contents() {
+        let report = validate_maker_accounts(&valid_message(), &maker()).unwrap();
+        assert_eq!(report.leg_offset, 2);
+        assert_eq!(report.instruction_index, 0);
     }
 
     #[test]
-    fn absent_pubkey_is_unsafe() {
-        let target = pk(99);
-        let m = msg(vec![ix(0, resolved(1), vec![resolved(7)], true)]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.confirmed_count, 0);
-        assert!(r.fill_ix_indices.is_empty());
+    fn rejects_duplicate_reference_in_same_instruction() {
+        let mut msg = valid_message();
+        msg.instructions[0].account_indices.push(1);
+        assert_eq!(
+            validate_maker_accounts(&msg, &maker()).unwrap_err(),
+            MakerValidationError::ReferenceCount {
+                role: "maker_base_token_account",
+                count: 2,
+            }
+        );
     }
 
     #[test]
-    fn hit_in_non_fill_ix_is_unsafe() {
-        let target = pk(7);
-        let m = msg(vec![
-            ix(0, resolved(1), vec![resolved(7)], true),
-            ix(1, resolved(2), vec![resolved(7)], false),
-        ]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.confirmed_count, 2);
-        assert_eq!(r.fill_ix_indices, vec![0]);
-        assert_eq!(r.non_fill_ix_indices, vec![1]);
+    fn rejects_reference_in_sibling_instruction() {
+        let mut msg = valid_message();
+        msg.instructions.push(DecodedInstruction {
+            instruction_index: 1,
+            program_id_index: 3,
+            account_indices: vec![2],
+            data: vec![],
+            fills: vec![],
+            entrypoint: None,
+        });
+        assert_eq!(
+            validate_maker_accounts(&msg, &maker()).unwrap_err(),
+            MakerValidationError::ReferenceCount {
+                role: "maker_quote_token_account",
+                count: 2,
+            }
+        );
     }
 
     #[test]
-    fn duplicate_within_one_fill_ix_is_unsafe() {
-        let target = pk(7);
-        let m = msg(vec![ix(
-            0,
-            resolved(1),
-            vec![resolved(7), resolved(9), resolved(7)],
-            true,
-        )]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.confirmed_count, 2);
-        assert_eq!(r.fill_ix_indices, vec![0]);
+    fn rejects_wrong_leg_slot() {
+        let mut msg = valid_message();
+        msg.instructions[0].account_indices.swap(6, 7);
+        assert_eq!(
+            validate_maker_accounts(&msg, &maker()).unwrap_err(),
+            MakerValidationError::LegNotFound
+        );
     }
 
     #[test]
-    fn duplicate_across_two_fill_ixs_is_unsafe() {
-        let target = pk(7);
-        let m = msg(vec![
-            ix(0, resolved(1), vec![resolved(7)], true),
-            ix(1, resolved(2), vec![resolved(7)], true),
-        ]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.confirmed_count, 2);
-        assert_eq!(r.fill_ix_indices, vec![0, 1]);
+    fn rejects_dynamic_or_missing_rfq_program_anchor() {
+        let mut msg = valid_message();
+        msg.static_account_keys[4] = [9; 32];
+        assert_eq!(
+            validate_maker_accounts(&msg, &maker()).unwrap_err(),
+            MakerValidationError::RfqProgramNotStatic
+        );
     }
 
     #[test]
-    fn unresolved_alt_anywhere_is_unsafe() {
-        let target = pk(7);
-        let m = msg(vec![
-            ix(0, resolved(1), vec![resolved(7)], true),
-            ix(1, resolved(2), vec![unresolved()], false),
-        ]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.ix_with_unresolved, vec![1]);
+    fn rejects_non_signing_fill_authority() {
+        let mut msg = valid_message();
+        msg.header.num_required_signatures = 0;
+        assert_eq!(
+            validate_maker_accounts(&msg, &maker()).unwrap_err(),
+            MakerValidationError::FillAuthorityNotSigner { index: 0 }
+        );
     }
 
     #[test]
-    fn program_id_position_counts_as_reference() {
-        let target = pk(9);
-        let m = msg(vec![
-            ix(0, resolved(1), vec![resolved(9)], true),
-            ix(1, resolved(9), vec![], false),
-        ]);
-        let r = check_pubkey_exclusivity(&m, &target);
-        assert!(!r.is_exclusive());
-        assert_eq!(r.confirmed_count, 2);
-        assert_eq!(r.non_fill_ix_indices, vec![1]);
-    }
-
-    #[test]
-    fn all_pubkeys_helper() {
-        let a = pk(7);
-        let b = pk(8);
-        let m = msg(vec![ix(
-            0,
-            resolved(1),
-            vec![resolved(7), resolved(8)],
-            true,
-        )]);
-        assert!(all_pubkeys_exclusive(&m, &[a, b]));
-
-        let m2 = msg(vec![
-            ix(0, resolved(1), vec![resolved(7), resolved(8)], true),
-            ix(1, resolved(2), vec![resolved(8)], false),
-        ]);
-        assert!(!all_pubkeys_exclusive(&m2, &[a, b]));
-    }
-
-    #[test]
-    fn base58_helpers_parse_then_check() {
-        let m = msg(vec![ix(0, resolved(1), vec![resolved(7)], true)]);
-        let target_b58 = bs58::encode(pk(7)).into_string();
-        let r = check_pubkey_exclusivity_base58(&m, &target_b58).unwrap();
-        assert!(r.is_exclusive());
-        assert_eq!(r.pubkey, pk(7));
-        assert_eq!(r.pubkey_base58(), target_b58);
-
-        assert!(check_pubkey_exclusivity_base58(&m, "not-valid-base58!").is_err());
-        assert!(check_pubkey_exclusivity_base58(&m, "1111").is_err());
-    }
-
-    #[test]
-    fn display_format() {
-        let m = msg(vec![ix(0, resolved(1), vec![resolved(7)], true)]);
-        let ok = check_pubkey_exclusivity(&m, &pk(7));
-        assert!(ok.to_string().starts_with("OK "));
-        assert!(ok.to_string().contains("exactly one reference"));
-
-        let absent = check_pubkey_exclusivity(&m, &pk(99));
-        let s = absent.to_string();
-        assert!(s.starts_with("UNSAFE "));
-        assert!(s.contains("absent"));
-
-        let m2 = msg(vec![
-            ix(0, resolved(1), vec![resolved(7)], true),
-            ix(1, resolved(2), vec![resolved(7)], false),
-        ]);
-        let unsafe_hit = check_pubkey_exclusivity(&m2, &pk(7));
-        let s = unsafe_hit.to_string();
-        assert!(s.contains("non-fill"));
-        assert!(s.contains("duplicate"));
+    fn base58_parser() {
+        let encoded = bs58::encode(FILL).into_string();
+        assert_eq!(parse_pubkey_base58(&encoded).unwrap(), FILL);
+        assert!(parse_pubkey_base58("not-valid-base58!").is_err());
     }
 }

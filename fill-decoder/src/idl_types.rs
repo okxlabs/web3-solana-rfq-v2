@@ -21,8 +21,7 @@ pub mod entrypoint {
     pub const SWAP_TOB_V2: [u8; 8] = [127, 36, 245, 95, 245, 226, 26, 145];
     pub const SWAP_TOB_WITH_RECEIVER: [u8; 8] = [99, 90, 79, 7, 70, 9, 213, 25];
     pub const SWAP_TOB_WITH_TOKEN_LEDGER: [u8; 8] = [55, 91, 218, 75, 154, 153, 5, 178];
-    pub const SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER: [u8; 8] =
-        [217, 6, 65, 254, 116, 251, 196, 178];
+    pub const SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER: [u8; 8] = [217, 6, 65, 254, 116, 251, 196, 178];
     pub const SWAP_TOB_ENHANCED: [u8; 8] = [123, 86, 65, 4, 153, 88, 245, 78];
 }
 
@@ -56,13 +55,13 @@ impl BorshDeserialize for Dex {
         // Variant indices and body sizes confirmed against
         // `fill-decoder/idls/dex_solana_v3.json`.
         let body_bytes: usize = match tag {
-            64 => 50,  // SolRfq: 6×u64 + 2×bool
-            74 | 75 => 2,  // SugarMoneyBuy/Sell: 2×u8
-            81 => 8,   // HumidifiSwap2: u64
-            82 => 16,  // Scorch: u128
-            100 => 8,  // SanctumPrefundSwapViaStake: u64
-            103 => 16, // WhalestreetV2: 2×u64
-            104 => 99, // SolfiV2WithSig: 3×u64 + u16 + u64 + [u8;64] + u8
+            64 => 50,     // SolRfq: 6×u64 + 2×bool
+            74 | 75 => 2, // SugarMoneyBuy/Sell: 2×u8
+            81 => 8,      // HumidifiSwap2: u64
+            82 => 16,     // Scorch: u128
+            100 => 8,     // SanctumPrefundSwapViaStake: u64
+            103 => 16,    // WhalestreetV2: 2×u64
+            104 => 99,    // SolfiV2WithSig: 3×u64 + u16 + u64 + [u8;64] + u8
             117 => {
                 let taker_side = u8::deserialize_reader(reader)?;
                 let rfq_id = u64::deserialize_reader(reader)?;
