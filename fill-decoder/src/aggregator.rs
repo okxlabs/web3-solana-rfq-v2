@@ -10,7 +10,6 @@
 //!    carrying the variant body (`rfq_id`, `expire_at`, `levels`).
 
 use crate::idl_types::{decode_swap_args, Dex, EntrypointKind};
-use crate::transaction::DecodedInstruction;
 use crate::types::{DecodedFill, Side};
 
 /// Base-58 form of the canonical `solana-rfq-v2` program id.
@@ -43,14 +42,9 @@ pub const RFQ_V2_PROGRAM_ID_BYTES: [u8; 32] = [
 /// [12] event_authority
 /// ```
 pub(crate) const LEG_PROGRAM_ID: usize = 0;
-pub(crate) const LEG_SWAP_AUTHORITY: usize = 1;
-pub(crate) const LEG_SOURCE_TOKEN_ACCOUNT: usize = 2;
-pub(crate) const LEG_DESTINATION_TOKEN_ACCOUNT: usize = 3;
 pub(crate) const LEG_FILL_AUTHORITY: usize = 4;
 pub(crate) const LEG_MAKER_BASE_TOKEN_ACCOUNT: usize = 5;
 pub(crate) const LEG_MAKER_QUOTE_TOKEN_ACCOUNT: usize = 6;
-pub(crate) const LEG_BASE_MINT: usize = 7;
-pub(crate) const LEG_QUOTE_MINT: usize = 8;
 pub(crate) const SOL_RFQ_V2_LEG_WIDTH: usize = 13;
 
 /// Base-58 form of the canonical `dex-solana-v3` program id (mainnet).
@@ -80,80 +74,6 @@ pub fn is_dex_solana_v3_program(pubkey: &[u8; 32]) -> bool {
 /// Embedded IDL — the full dex-solana-v3 IDL we Borsh-mirror through
 /// `crate::idl_types`. Exposed for tooling that wants to introspect it.
 pub const AGGREGATOR_IDL_JSON: &str = include_str!("../idls/dex_solana_v3.json");
-
-/// Locate the SolRfqV2 leg's 13-account slice inside a dex-solana-v3 swap
-/// instruction's account list.
-///
-/// Scans `ix.accounts` for the position where the resolved pubkey equals
-/// `RFQ_V2_PROGRAM_ID_BYTES`. That position is the leg slice's position 0
-/// (the adapter's `dex_program_id` slot); the remaining 12 slots follow it
-/// in fixed order.
-///
-/// Returns the offset of the leg slice's start within `ix.accounts`. Returns
-/// an error if no SolRfqV2 leg is present, if the resolved program id at slot
-/// 0 doesn't have room for the full 13-slot slice, or if it appears more than
-/// once (multiple SolRfqV2 legs are out of scope for the maker's
-/// exactly-one-fill invariant — see [`crate::FillCountError`]).
-pub(crate) fn find_sol_rfq_v2_leg_offset(
-    ix: &DecodedInstruction,
-) -> Result<usize, SwapLegLookupError> {
-    let mut matches = ix
-        .accounts
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.is_resolved && a.pubkey == RFQ_V2_PROGRAM_ID_BYTES)
-        .map(|(i, _)| i);
-    let first = matches.next().ok_or(SwapLegLookupError::ProgramIdNotFound)?;
-    if matches.next().is_some() {
-        return Err(SwapLegLookupError::MultipleProgramIdSlots);
-    }
-    if ix.accounts.len() < first + SOL_RFQ_V2_LEG_WIDTH {
-        return Err(SwapLegLookupError::TruncatedLegSlice {
-            offset: first,
-            available: ix.accounts.len() - first,
-        });
-    }
-    Ok(first)
-}
-
-/// Why locating a SolRfqV2 leg slice failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwapLegLookupError {
-    /// `RFQ_V2_PROGRAM_ID_BYTES` was not present in the instruction's
-    /// account list. Either the ix has no SolRfqV2 leg, or the program id at
-    /// slot 0 of the leg slice is an unresolved ALT entry.
-    ProgramIdNotFound,
-    /// The program id appears in more than one slot — possibly multiple
-    /// SolRfqV2 legs. The maker's signing flow assumes exactly one fill;
-    /// see [`crate::FillCountError`].
-    MultipleProgramIdSlots,
-    /// The program id is present but the account list ends before the leg's
-    /// 13-slot layout completes.
-    TruncatedLegSlice { offset: usize, available: usize },
-}
-
-impl core::fmt::Display for SwapLegLookupError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SwapLegLookupError::ProgramIdNotFound => write!(
-                f,
-                "RFQ_V2_PROGRAM_ID_BYTES not found among resolved accounts in this instruction"
-            ),
-            SwapLegLookupError::MultipleProgramIdSlots => write!(
-                f,
-                "RFQ_V2_PROGRAM_ID_BYTES appears in multiple account slots; \
-                 exactly one SolRfqV2 leg is expected"
-            ),
-            SwapLegLookupError::TruncatedLegSlice { offset, available } => write!(
-                f,
-                "SolRfqV2 leg starts at index {offset} but only {available} accounts follow; \
-                 expected {SOL_RFQ_V2_LEG_WIDTH}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for SwapLegLookupError {}
 
 /// Returns the entrypoint kind plus one [`DecodedFill`] per `Dex::SolRfqV2`
 /// leg in the entrypoint's `SwapArgs.routes`. Returns `(None, [])` when the
@@ -264,7 +184,10 @@ mod tests {
             1,
             7,
             2_000_000_000,
-            &[Level { base_atoms: 100, quote_atoms: 85 }],
+            &[Level {
+                base_atoms: 100,
+                quote_atoms: 85,
+            }],
         );
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 100, vec![route]);
@@ -305,7 +228,10 @@ mod tests {
             0,
             42,
             2_000_000_000,
-            &[Level { base_atoms: 100, quote_atoms: 85 }],
+            &[Level {
+                base_atoms: 100,
+                quote_atoms: 85,
+            }],
         );
         let r2 = encode_route(&dex_v2, 5_000, 0x02);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![r1, r2]);
@@ -321,7 +247,10 @@ mod tests {
             0,
             42,
             2_000_000_000,
-            &[Level { base_atoms: 100, quote_atoms: 85 }],
+            &[Level {
+                base_atoms: 100,
+                quote_atoms: 85,
+            }],
         );
         let route = encode_route(&dex, 10_000, 0x01);
 

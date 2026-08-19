@@ -3,31 +3,29 @@
 //! ```text
 //! decode-tx --base64 <BASE64>                # decode a serialized tx
 //! decode-tx --tx <SIGNATURE> --rpc-url <URL> # fetch from RPC, decode
-//! decode-tx ... --check <PUBKEY>             # exclusivity check (repeatable)
+//! decode-tx ... --fill-authority <PUBKEY>     # static maker-account validation
 //! decode-tx ... --allow-token-ledger         # opt in to token-ledger entrypoints
 //! decode-tx ... --json                       # machine-readable output
 //! ```
 //!
-//! Exit codes: 0 ok, 1 decode err, 2 cli/rpc err, 3 exclusivity fail,
-//! 4 fill count wrong, 5 mint mismatch, 6 token-ledger entrypoint carries
+//! Exit codes: 0 ok, 1 decode err, 2 cli/rpc err, 3 maker validation fail,
+//! 4 fill count wrong, 6 token-ledger entrypoint carries
 //! a SolRfqV2 leg (override with `--allow-token-ledger`).
 
 #![cfg(feature = "cli")]
 
-use base64::Engine;
 use clap::Parser;
 use fill_decoder::{
-    check_pubkey_exclusivity_base58, decode_transaction_base64, parse_pubkey_base58,
-    AddressLookupTableEntry, DecodedFill, DecodedTransaction, ExclusivityReport, FillCountError,
-    MintPairMismatch,
+    decode_transaction_base64, parse_pubkey_base58, validate_maker_accounts, DecodedFill,
+    DecodedTransaction, FillCountError, MakerAccounts, MakerValidationError, MakerValidationReport,
 };
 
-/// On-chain `AddressLookupTable` account layout: addresses begin at byte 56.
-/// See `solana-address-lookup-table-program` -- `LOOKUP_TABLE_META_SIZE = 56`.
-const LOOKUP_TABLE_META_SIZE: usize = 56;
-
 #[derive(Parser, Debug)]
-#[command(name = "decode-tx", version, about = "Decode OKX dex-solana-v3 transactions and extract SolRfqV2 legs")]
+#[command(
+    name = "decode-tx",
+    version,
+    about = "Decode OKX dex-solana-v3 transactions and extract SolRfqV2 legs"
+)]
 struct Args {
     /// Base64-encoded transaction.
     #[arg(long, conflicts_with = "tx")]
@@ -41,11 +39,17 @@ struct Args {
     #[arg(long, env = "RPC_URL")]
     rpc_url: Option<String>,
 
-    /// Base58 pubkey to verify is referenced only by fill-bearing instructions.
-    /// Repeat for each sensitive account (typically the maker's fill_authority,
-    /// maker_base_token_account, and maker_quote_token_account).
-    #[arg(long = "check")]
-    check_pubkeys: Vec<String>,
+    /// Expected static fill authority. Must be supplied with both maker token accounts.
+    #[arg(long, requires_all = ["maker_base_token_account", "maker_quote_token_account"])]
+    fill_authority: Option<String>,
+
+    /// Expected static maker base token account.
+    #[arg(long, requires_all = ["fill_authority", "maker_quote_token_account"])]
+    maker_base_token_account: Option<String>,
+
+    /// Expected static maker quote token account.
+    #[arg(long, requires_all = ["fill_authority", "maker_base_token_account"])]
+    maker_quote_token_account: Option<String>,
 
     /// Base mint decimals. Required together with `--quote-decimals` to render
     /// levels as `(price, qty)` instead of raw atoms.
@@ -55,15 +59,6 @@ struct Args {
     /// Quote mint decimals. See `--base-decimals`.
     #[arg(long, requires = "base_decimals")]
     quote_decimals: Option<u8>,
-
-    /// Base58 base mint. With `--quote-mint`, derives the taker's `Side`
-    /// from the on-wire `source_mint` at swap account position 3.
-    #[arg(long, requires = "quote_mint")]
-    base_mint: Option<String>,
-
-    /// Base58 quote mint. See `--base-mint`.
-    #[arg(long, requires = "base_mint")]
-    quote_mint: Option<String>,
 
     /// Opt in to accepting SolRfqV2 fills that ride inside a token-ledger
     /// aggregator entrypoint. Off by default: token-ledger entrypoints hide
@@ -105,8 +100,7 @@ async fn main() {
         }
     };
 
-    // First pass: decode with no ALT state so we can read off the table pubkeys.
-    let tx_unresolved = match decode_transaction_base64(&b64, &[] as &[AddressLookupTableEntry]) {
+    let tx = match decode_transaction_base64(&b64) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("error: decode failed: {e}");
@@ -114,156 +108,44 @@ async fn main() {
         }
     };
 
-    let alt_keys: Vec<[u8; 32]> = tx_unresolved
-        .message
-        .address_table_lookups
-        .iter()
-        .map(|l| l.table_key)
-        .collect();
-
-    // Fail-closed ALT resolution: if the tx references any ALTs we must resolve
-    // them, otherwise downstream account-level checks (swap_leg_accounts,
-    // verify_mint_pair, exclusivity) silently weaken into "true for the
-    // resolved subset" without the caller realising.
-    let tx = if alt_keys.is_empty() {
-        tx_unresolved
-    } else {
-        let url = args.rpc_url.as_deref().unwrap_or_else(|| {
-            eprintln!(
-                "error: transaction references {} ALT(s); --rpc-url (or RPC_URL) is required \
-                 to resolve them",
-                alt_keys.len()
-            );
-            std::process::exit(2);
-        });
-        let alt_state = fetch_alt_entries(url, &alt_keys).await.unwrap_or_else(|e| {
-            eprintln!("error: ALT fetch failed: {e}");
-            std::process::exit(2);
-        });
-        let resolved = decode_transaction_base64(&b64, &alt_state).unwrap_or_else(|e| {
-            eprintln!("error: re-decode with ALT state failed: {e}");
-            std::process::exit(1);
-        });
-        if resolved.message.unresolved_count > 0 {
-            eprintln!(
-                "error: {} account(s) still unresolved after ALT fetch; \
-                 the referenced ALT may be truncated or missing entries",
-                resolved.message.unresolved_count
-            );
-            std::process::exit(2);
-        }
-        resolved
-    };
-
-    let reports: Vec<ExclusivityReport> = args
-        .check_pubkeys
-        .iter()
-        .map(|pk| check_pubkey_exclusivity_base58(&tx.message, pk))
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_else(|e| {
-            eprintln!("error: --check parse: {e}");
-            std::process::exit(2);
-        });
-
     let decimals = args.base_decimals.zip(args.quote_decimals);
     let fill_status = tx.single_fill().map(|_| ());
-
-    let mint_pair = args
-        .base_mint
-        .as_deref()
-        .zip(args.quote_mint.as_deref())
-        .map(|(b, q)| {
-            let bb = parse_pubkey_base58(b).unwrap_or_else(|e| {
-                eprintln!("error: --base-mint: {e}");
+    let maker_check = args.fill_authority.as_deref().map(|fill_authority| {
+        let parse = |label: &str, value: &str| {
+            parse_pubkey_base58(value).unwrap_or_else(|e| {
+                eprintln!("error: --{label}: {e}");
                 std::process::exit(2);
-            });
-            let qq = parse_pubkey_base58(q).unwrap_or_else(|e| {
-                eprintln!("error: --quote-mint: {e}");
-                std::process::exit(2);
-            });
-            (bb, qq)
-        });
-    let mint_check: Option<Result<(), MintPairMismatch>> = mint_pair
-        .and_then(|(b, q)| tx.swap_leg_accounts().ok().map(|leg| (leg, b, q)))
-        .map(|(leg, b, q)| leg.verify_mint_pair(&b, &q));
+            })
+        };
+        let maker = MakerAccounts {
+            fill_authority: parse("fill-authority", fill_authority),
+            maker_base_token_account: parse(
+                "maker-base-token-account",
+                args.maker_base_token_account.as_deref().unwrap(),
+            ),
+            maker_quote_token_account: parse(
+                "maker-quote-token-account",
+                args.maker_quote_token_account.as_deref().unwrap(),
+            ),
+        };
+        validate_maker_accounts(&tx.message, &maker)
+    });
 
     if args.json {
-        print_json(&tx, &reports, decimals, &fill_status, &mint_check);
+        print_json(&tx, decimals, &fill_status, &maker_check);
     } else {
-        print_human(&tx, &reports, decimals, &fill_status, &mint_check);
+        print_human(&tx, decimals, &fill_status, &maker_check);
     }
 
     if fill_status.is_err() {
         std::process::exit(4);
     }
-    if matches!(mint_check, Some(Err(_))) {
-        std::process::exit(5);
-    }
     if tx.has_token_ledger_fill() && !args.allow_token_ledger {
         std::process::exit(6);
     }
-    if reports.iter().any(|r| !r.is_exclusive()) {
+    if matches!(maker_check, Some(Err(_))) {
         std::process::exit(3);
     }
-}
-
-
-async fn fetch_alt_entries(
-    url: &str,
-    table_keys: &[[u8; 32]],
-) -> Result<Vec<AddressLookupTableEntry>, String> {
-    let client = reqwest::Client::new();
-    let mut out = Vec::with_capacity(table_keys.len());
-    for tk in table_keys {
-        let tk_b58 = bs58::encode(tk).into_string();
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getAccountInfo",
-            "params": [tk_b58, {"encoding": "base64", "commitment": "confirmed"}]
-        });
-        let resp: serde_json::Value = client
-            .post(url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-            .json()
-            .await
-            .map_err(|e| e.to_string())?;
-        let data_b64 = resp["result"]["value"]["data"][0]
-            .as_str()
-            .ok_or_else(|| format!("ALT {tk_b58}: unexpected RPC response shape: {resp}"))?;
-        let raw = base64::engine::general_purpose::STANDARD
-            .decode(data_b64.trim())
-            .map_err(|e| format!("ALT {tk_b58}: base64 decode: {e}"))?;
-        if raw.len() < LOOKUP_TABLE_META_SIZE {
-            return Err(format!(
-                "ALT {tk_b58}: account data {} bytes, expected at least {LOOKUP_TABLE_META_SIZE}",
-                raw.len()
-            ));
-        }
-        let body = &raw[LOOKUP_TABLE_META_SIZE..];
-        if body.len() % 32 != 0 {
-            return Err(format!(
-                "ALT {tk_b58}: address payload {} bytes not a multiple of 32",
-                body.len()
-            ));
-        }
-        let addresses: Vec<[u8; 32]> = body
-            .chunks_exact(32)
-            .map(|c| {
-                let mut a = [0u8; 32];
-                a.copy_from_slice(c);
-                a
-            })
-            .collect();
-        out.push(AddressLookupTableEntry {
-            table_key: *tk,
-            addresses,
-        });
-    }
-    Ok(out)
 }
 
 async fn fetch_tx_base64(url: &str, sig: &str) -> Result<String, String> {
@@ -295,18 +177,17 @@ async fn fetch_tx_base64(url: &str, sig: &str) -> Result<String, String> {
 
 fn print_human(
     tx: &DecodedTransaction,
-    reports: &[ExclusivityReport],
     decimals: Option<(u8, u8)>,
     fill_status: &Result<(), FillCountError>,
-    mint_check: &Option<Result<(), MintPairMismatch>>,
+    maker_check: &Option<Result<MakerValidationReport, MakerValidationError>>,
 ) {
     println!("Decoded transaction");
     println!("  signatures: {}", tx.signatures.len());
     println!("  version:    {:?}", tx.message.version);
+    println!("  static:     {}", tx.message.static_account_keys.len());
     println!(
-        "  accounts:   {} ({} unresolved)",
-        tx.message.account_keys.len(),
-        tx.message.unresolved_count
+        "  dynamic:    {} writable + {} readonly (not resolved)",
+        tx.message.loaded_writable_count, tx.message.loaded_readonly_count
     );
     println!("  ixs:        {}", tx.message.instructions.len());
 
@@ -323,7 +204,11 @@ fn print_human(
     }
 
     for ix in &tx.message.instructions {
-        let pid = bs58::encode(&ix.program_id.pubkey).into_string();
+        let pid = tx
+            .message
+            .static_account_key(ix.program_id_index)
+            .map(|key| short(&bs58::encode(key).into_string()))
+            .unwrap_or_else(|| format!("dynamic[{}]", ix.program_id_index));
         let ep = match ix.entrypoint {
             Some(k) => format!(", {k}"),
             None => String::new(),
@@ -331,8 +216,8 @@ fn print_human(
         println!(
             "  [{:>2}] {} ({} accs, {} bytes, {} rfq legs{ep})",
             ix.instruction_index,
-            short(&pid),
-            ix.accounts.len(),
+            pid,
+            ix.account_indices.len(),
             ix.data.len(),
             ix.fills.len(),
         );
@@ -356,36 +241,12 @@ fn print_human(
         println!("  OK no token-ledger entrypoint carries a SolRfqV2 leg");
     }
 
-    if let Ok(leg) = tx.swap_leg_accounts() {
+    if let Some(result) = maker_check {
         println!();
-        println!("SolRfqV2 leg accounts");
-        let p = |label: &str, k: &[u8; 32]| {
-            println!("  {label:<32} {}", bs58::encode(k).into_string());
-        };
-        p("swap_authority (taker)", &leg.swap_authority);
-        p("swap_source_token_account", &leg.swap_source_token_account);
-        p("swap_destination_token_account", &leg.swap_destination_token_account);
-        p("fill_authority (maker)", &leg.fill_authority);
-        p("maker_base_token_account", &leg.maker_base_token_account);
-        p("maker_quote_token_account", &leg.maker_quote_token_account);
-        p("base_mint", &leg.base_mint);
-        p("quote_mint", &leg.quote_mint);
-    }
-
-    if let Some(r) = mint_check {
-        println!();
-        println!("Mint pair check");
-        match r {
-            Ok(()) => println!("  OK leg's (base, quote) matches expected"),
+        println!("Maker account check");
+        match result {
+            Ok(report) => println!("  {report}"),
             Err(e) => println!("  UNSAFE {e}"),
-        }
-    }
-
-    if !reports.is_empty() {
-        println!();
-        println!("Exclusivity checks");
-        for r in reports {
-            println!("  {r}");
         }
     }
 }
@@ -425,37 +286,27 @@ fn short(pk: &str) -> String {
 
 fn print_json(
     tx: &DecodedTransaction,
-    reports: &[ExclusivityReport],
     decimals: Option<(u8, u8)>,
     fill_status: &Result<(), FillCountError>,
-    mint_check: &Option<Result<(), MintPairMismatch>>,
+    maker_check: &Option<Result<MakerValidationReport, MakerValidationError>>,
 ) {
     let ixs: Vec<serde_json::Value> = tx
         .message
         .instructions
         .iter()
         .map(|ix| {
+            let program_id = tx
+                .message
+                .static_account_key(ix.program_id_index)
+                .map(|key| bs58::encode(key).into_string());
             serde_json::json!({
                 "index": ix.instruction_index,
-                "program_id": bs58::encode(&ix.program_id.pubkey).into_string(),
+                "program_id_index": ix.program_id_index,
+                "static_program_id": program_id,
                 "entrypoint": ix.entrypoint.map(|k| k.to_string()),
-                "account_count": ix.accounts.len(),
+                "account_count": ix.account_indices.len(),
                 "data_bytes": ix.data.len(),
                 "rfq_legs": ix.fills.iter().map(|f| fill_json(f, decimals)).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-
-    let exclusivity: Vec<serde_json::Value> = reports
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "pubkey": r.pubkey_base58(),
-                "safe": r.is_exclusive(),
-                "confirmed_count": r.confirmed_count,
-                "fill_ix_indices": r.fill_ix_indices,
-                "non_fill_ix_indices": r.non_fill_ix_indices,
-                "ix_with_unresolved": r.ix_with_unresolved,
             })
         })
         .collect();
@@ -471,20 +322,29 @@ fn print_json(
         "has_token_ledger_fill": tx.has_token_ledger_fill(),
     });
 
-    let mint_check_json = mint_check.as_ref().map(|r| match r {
-        Ok(()) => serde_json::json!({ "ok": true }),
+    let maker_check_json = maker_check.as_ref().map(|r| match r {
+        Ok(report) => serde_json::json!({
+            "ok": true,
+            "instruction_index": report.instruction_index,
+            "leg_offset": report.leg_offset,
+            "fill_authority_index": report.fill_authority_index,
+            "maker_base_token_account_index": report.maker_base_token_account_index,
+            "maker_quote_token_account_index": report.maker_quote_token_account_index,
+            "rfq_program_index": report.rfq_program_index,
+        }),
         Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
     });
 
     let out = serde_json::json!({
         "version": format!("{:?}", tx.message.version),
         "signature_count": tx.signatures.len(),
-        "unresolved_count": tx.message.unresolved_count,
+        "static_account_count": tx.message.static_account_keys.len(),
+        "loaded_writable_count": tx.message.loaded_writable_count,
+        "loaded_readonly_count": tx.message.loaded_readonly_count,
         "instructions": ixs,
         "single_fill": single_fill,
         "entrypoint_check": entrypoint_check,
-        "mint_check": mint_check_json,
-        "exclusivity_checks": exclusivity,
+        "maker_account_check": maker_check_json,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
