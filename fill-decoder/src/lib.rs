@@ -11,7 +11,8 @@
 //!
 //! The maker then validates by:
 //! 1. Calling [`DecodedTransaction::single_fill`] to confirm the tx carries
-//!    exactly one SolRfqV2 leg (zero or multiple is refuse-to-sign).
+//!    exactly one supported SolRfqV2 leg (zero, multiple, or an unsupported
+//!    entrypoint is refuse-to-sign).
 //! 2. Looking up its own pre-signed quote via `rfq_id` to recover the
 //!    expected `(base_mint, quote_mint, levels)`.
 //! 3. Confirming the decoded `levels` matches that quote exactly.

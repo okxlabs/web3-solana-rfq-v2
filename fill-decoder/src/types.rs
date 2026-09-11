@@ -108,6 +108,8 @@ pub enum FillCountError {
     /// More than one SolRfqV2 leg was found. A legitimate maker-signing flow
     /// expects exactly one fill per tx, so refuse to sign.
     Multiple(usize),
+    /// A recognised but unsupported aggregator entrypoint was present.
+    UnsupportedEntrypoint,
 }
 
 impl core::fmt::Display for FillCountError {
@@ -118,6 +120,9 @@ impl core::fmt::Display for FillCountError {
                 f,
                 "{n} SolRfqV2 legs found in transaction; expected exactly 1"
             ),
+            FillCountError::UnsupportedEntrypoint => {
+                write!(f, "unsupported aggregator entrypoint present")
+            }
         }
     }
 }
