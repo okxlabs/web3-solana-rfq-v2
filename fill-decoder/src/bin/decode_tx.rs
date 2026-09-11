@@ -9,8 +9,7 @@
 //! ```
 //!
 //! Exit codes: 0 ok, 1 decode err, 2 cli/rpc err, 3 maker validation fail,
-//! 4 fill count wrong, 6 token-ledger entrypoint carries
-//! a SolRfqV2 leg (override with `--allow-token-ledger`).
+//! 4 fill count wrong, 6 unsupported/token-ledger entrypoint policy failure.
 
 #![cfg(feature = "cli")]
 
@@ -63,7 +62,8 @@ struct Args {
     /// Opt in to accepting SolRfqV2 fills that ride inside a token-ledger
     /// aggregator entrypoint. Off by default: token-ledger entrypoints hide
     /// `amount_in` from the args and enable atomic arbitrage composition, so
-    /// the conservative policy is to refuse-to-sign.
+    /// the conservative policy is to refuse-to-sign. This does not override
+    /// the unconditional rejection of `swap_tob*` entrypoints.
     #[arg(long)]
     allow_token_ledger: bool,
 
@@ -137,6 +137,9 @@ async fn main() {
         print_human(&tx, decimals, &fill_status, &maker_check);
     }
 
+    if tx.has_unsupported_entrypoint() {
+        std::process::exit(6);
+    }
     if fill_status.is_err() {
         std::process::exit(4);
     }
@@ -235,7 +238,9 @@ fn print_human(
 
     println!();
     println!("Entrypoint check");
-    if tx.has_token_ledger_fill() {
+    if tx.has_unsupported_entrypoint() {
+        println!("  UNSAFE swap_tob* entrypoint is not supported");
+    } else if tx.has_token_ledger_fill() {
         println!("  UNSAFE SolRfqV2 leg rides inside a token-ledger entrypoint");
     } else {
         println!("  OK no token-ledger entrypoint carries a SolRfqV2 leg");
@@ -318,7 +323,8 @@ fn print_json(
     });
 
     let entrypoint_check = serde_json::json!({
-        "ok": !tx.has_token_ledger_fill(),
+        "ok": !tx.has_unsupported_entrypoint() && !tx.has_token_ledger_fill(),
+        "has_unsupported_entrypoint": tx.has_unsupported_entrypoint(),
         "has_token_ledger_fill": tx.has_token_ledger_fill(),
     });
 

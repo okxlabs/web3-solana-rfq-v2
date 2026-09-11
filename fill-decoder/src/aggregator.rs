@@ -77,8 +77,9 @@ pub const AGGREGATOR_IDL_JSON: &str = include_str!("../idls/dex_solana_v3.json")
 
 /// Returns the entrypoint kind plus one [`DecodedFill`] per `Dex::SolRfqV2`
 /// leg in the entrypoint's `SwapArgs.routes`. Returns `(None, [])` when the
-/// instruction is not a known swap entrypoint. Legs whose `taker_side` byte
-/// is neither 0 nor 1 are silently skipped (they would revert on chain).
+/// instruction is not a known swap entrypoint. Rejected `swap_tob*` entrypoints
+/// return `(Unsupported, [])`. Legs whose `taker_side` byte is neither 0 nor 1
+/// are silently skipped (they would revert on chain).
 pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> (Option<EntrypointKind>, Vec<DecodedFill>) {
     let Some(args) = decode_swap_args(data) else {
         return (None, Vec::new());
@@ -179,6 +180,58 @@ mod tests {
     }
 
     #[test]
+    fn swap_toc_v2_decodes_idl_discriminator() {
+        let dex = encode_sol_rfq_v2_variant(0, 42, 2_000_000_000, &[]);
+        let route = encode_route(&dex, 10_000, 0x01);
+        let ix_data =
+            encode_swap_args_ix([127, 214, 107, 189, 23, 90, 47, 104], 7, 1_000, vec![route]);
+
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        assert_eq!(kind, Some(EntrypointKind::Concrete));
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].rfq_id, 42);
+    }
+
+    #[test]
+    fn supported_entrypoints_decode_idl_discriminators() {
+        let dex = encode_sol_rfq_v2_variant(0, 42, 2_000_000_000, &[]);
+        let route = encode_route(&dex, 10_000, 0x01);
+        for disc in [
+            entrypoint::SWAP,
+            entrypoint::PROXY_SWAP,
+            entrypoint::SWAP_TOC,
+            entrypoint::SWAP_TOC_V2,
+            entrypoint::SWAP_TOC_V3,
+        ] {
+            let ix_data = encode_swap_args_ix(disc, 7, 1_000, vec![route.clone()]);
+            let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+            assert_eq!(kind, Some(EntrypointKind::Concrete));
+            assert_eq!(fills.len(), 1);
+            assert_eq!(fills[0].rfq_id, 42);
+        }
+    }
+
+    #[test]
+    fn every_swap_tob_entrypoint_is_unsupported() {
+        for disc in [
+            entrypoint::SWAP_TOB,
+            entrypoint::SWAP_TOB_V2,
+            entrypoint::SWAP_TOB_V3,
+            entrypoint::SWAP_TOB_WITH_RECEIVER,
+            entrypoint::SWAP_TOB_WITH_RECEIVER_V3,
+            entrypoint::SWAP_TOB_ENHANCED,
+            entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER,
+            entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER_V3,
+            entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER,
+            entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER_V3,
+        ] {
+            let (kind, fills) = decode_solrfqv2_legs(&disc);
+            assert_eq!(kind, Some(EntrypointKind::Unsupported));
+            assert!(fills.is_empty());
+        }
+    }
+
+    #[test]
     fn single_solrfqv2_leg_ask() {
         let dex = encode_sol_rfq_v2_variant(
             1,
@@ -242,28 +295,35 @@ mod tests {
     }
 
     #[test]
-    fn token_ledger_entrypoint_decoded() {
-        let dex = encode_sol_rfq_v2_variant(
-            0,
-            42,
-            2_000_000_000,
-            &[Level {
-                base_atoms: 100,
-                quote_atoms: 85,
-            }],
+    fn bodyful_non_rfq_variant_does_not_desync_following_route() {
+        // PumpfunBuy is Dex tag 23 and carries a bool. The old tag-only
+        // fallback consumed zero bytes here, shifting the following RFQ route.
+        let first = encode_route(&encode_other_variant(23, 1), 5_000, 0x01);
+        let second = encode_route(
+            &encode_sol_rfq_v2_variant(0, 42, 2_000_000_000, &[]),
+            5_000,
+            0x12,
         );
-        let route = encode_route(&dex, 10_000, 0x01);
+        let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![first, second]);
 
-        // SwapArgsTokenLedger: order_id, expect_amount_out, slippage, routes.
-        let mut bytes = entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER.to_vec();
-        bytes.extend_from_slice(&7u64.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&route);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].rfq_id, 42);
+    }
 
-        let (kind, fills) = decode_solrfqv2_legs(&bytes);
-        assert_eq!(kind, Some(EntrypointKind::TokenLedger));
+    #[test]
+    fn meteora_hook_variant_skips_remaining_info_and_bin_count() {
+        // MeteoraDlmmSwap2Hook is Dex tag 119:
+        // RemainingAccountsInfo { slices: Vec<_> } + bin_array_count: u8.
+        let first = encode_route(&encode_other_variant(119, 5), 5_000, 0x01);
+        let second = encode_route(
+            &encode_sol_rfq_v2_variant(0, 42, 2_000_000_000, &[]),
+            5_000,
+            0x12,
+        );
+        let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![first, second]);
+
+        let (_, fills) = decode_solrfqv2_legs(&ix_data);
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }

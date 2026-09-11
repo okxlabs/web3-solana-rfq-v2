@@ -74,7 +74,19 @@ impl DecodedMessage {
             .any(|ix| !ix.fills.is_empty() && ix.entrypoint == Some(EntrypointKind::TokenLedger))
     }
 
+    /// Returns true when a recognised but unsupported aggregator entrypoint
+    /// is present. Currently this means any `swap_tob*` instruction, even if
+    /// it contains no SolRfqV2 leg.
+    pub fn has_unsupported_entrypoint(&self) -> bool {
+        self.instructions
+            .iter()
+            .any(|ix| ix.entrypoint == Some(EntrypointKind::Unsupported))
+    }
+
     pub fn single_fill(&self) -> core::result::Result<&DecodedFill, FillCountError> {
+        if self.has_unsupported_entrypoint() {
+            return Err(FillCountError::UnsupportedEntrypoint);
+        }
         let mut iter = self.fills();
         let first = iter.next().ok_or(FillCountError::NotFound)?;
         let extra = iter.count();
@@ -97,6 +109,10 @@ impl DecodedTransaction {
 
     pub fn has_token_ledger_fill(&self) -> bool {
         self.message.has_token_ledger_fill()
+    }
+
+    pub fn has_unsupported_entrypoint(&self) -> bool {
+        self.message.has_unsupported_entrypoint()
     }
 
     pub fn single_fill(&self) -> core::result::Result<&DecodedFill, FillCountError> {
@@ -261,6 +277,19 @@ mod tests {
                 .unwrap_err(),
             FillCountError::Multiple(2)
         );
+    }
+
+    #[test]
+    fn single_fill_rejects_unsupported_entrypoint_even_with_other_fill() {
+        let message = msg(vec![
+            ix(vec![fill(42)], Some(EntrypointKind::Concrete)),
+            ix(vec![], Some(EntrypointKind::Unsupported)),
+        ]);
+        assert_eq!(
+            message.single_fill().unwrap_err(),
+            FillCountError::UnsupportedEntrypoint
+        );
+        assert!(message.has_unsupported_entrypoint());
     }
 
     #[test]
