@@ -57,7 +57,7 @@ pub use exclusivity::{
 pub use idl_types::EntrypointKind;
 pub use transaction::{DecodedInstruction, DecodedMessage, DecodedTransaction};
 pub use types::{DecodedFill, FillCountError, Level, PriceQty, Side};
-pub use wire::{AddressTableLookup, MessageVersion};
+pub use wire::{AddressTableLookup, MessageVersion, V1TransactionConfig};
 
 /// The Anchor IDL for the `solana-rfq-v2` program, embedded at compile time.
 pub const IDL_JSON: &str = include_str!("../idls/solana_rfq_v2.json");
@@ -244,6 +244,114 @@ mod constructed_transaction_tests {
         tx.extend_from_slice(&[0u8; 64]); // maker signature placeholder
         tx.extend_from_slice(&message);
         tx
+    }
+
+    /// Convert the constructed v0 fixture to the independent v1 layout. ALT
+    /// addresses become explicit keys; instruction indices remain unchanged.
+    fn v1_transaction_bytes(scenario: Scenario) -> Vec<u8> {
+        let parsed = wire::parse_transaction(&transaction_bytes(scenario)).unwrap();
+        let mut msg = parsed.message;
+        let loaded_count: usize = msg
+            .address_table_lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+            .sum();
+        for index in 0..loaded_count {
+            msg.static_account_keys.push([0xa0 + index as u8; 32]);
+        }
+        let mut bytes = vec![
+            0x81,
+            msg.header.num_required_signatures,
+            msg.header.num_readonly_signed_accounts,
+            msg.header.num_readonly_unsigned_accounts,
+        ];
+        bytes.extend_from_slice(&4u32.to_le_bytes()); // compute-unit-limit
+        bytes.extend_from_slice(&msg.recent_blockhash);
+        bytes.push(msg.instructions.len() as u8);
+        bytes.push(msg.static_account_keys.len() as u8);
+        for key in msg.static_account_keys {
+            bytes.extend_from_slice(&key);
+        }
+        bytes.extend_from_slice(&200_000u32.to_le_bytes());
+        for ix in &msg.instructions {
+            bytes.push(ix.program_id_index);
+            bytes.push(ix.account_indices.len() as u8);
+            bytes.extend_from_slice(&(ix.data.len() as u16).to_le_bytes());
+        }
+        for ix in msg.instructions {
+            bytes.extend_from_slice(&ix.account_indices);
+            bytes.extend_from_slice(&ix.data);
+        }
+        for signature in parsed.signatures {
+            bytes.extend_from_slice(&signature);
+        }
+        bytes
+    }
+
+    #[test]
+    fn constructed_v1_transactions_decode_fills_and_validate_maker_accounts() {
+        for scenario in [Scenario::SingleHop, Scenario::MultiHop] {
+            let bytes = v1_transaction_bytes(scenario);
+            let tx = decode_transaction_bytes(&bytes).unwrap();
+            assert_eq!(tx.message.version, MessageVersion::V1);
+            assert_eq!(tx.message.loaded_writable_count, 0);
+            assert_eq!(tx.message.loaded_readonly_count, 0);
+            assert!(tx.message.address_table_lookups.is_empty());
+            assert_eq!(tx.single_fill().unwrap().rfq_id, 42);
+            assert_eq!(
+                tx.single_fill().unwrap().levels,
+                vec![Level {
+                    base_atoms: 100,
+                    quote_atoms: 85
+                }]
+            );
+            assert_eq!(
+                tx.message
+                    .transaction_config
+                    .as_ref()
+                    .unwrap()
+                    .compute_unit_limit(),
+                200_000
+            );
+            let report = validate_maker_accounts(&tx.message, &maker_accounts()).unwrap();
+            assert_eq!(
+                report.leg_offset,
+                if matches!(scenario, Scenario::MultiHop) {
+                    8
+                } else {
+                    2
+                }
+            );
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            assert_eq!(
+                decode_transaction_base64(&b64)
+                    .unwrap()
+                    .single_fill()
+                    .unwrap()
+                    .rfq_id,
+                42
+            );
+            let message_b64 =
+                base64::engine::general_purpose::STANDARD.encode(&bytes[..bytes.len() - 64]);
+            assert_eq!(
+                decode_message_base64(&message_b64)
+                    .unwrap()
+                    .single_fill()
+                    .unwrap()
+                    .rfq_id,
+                42
+            );
+        }
+    }
+
+    #[test]
+    fn constructed_v1_transaction_rejects_wrong_maker_slots() {
+        let tx =
+            decode_transaction_bytes(&v1_transaction_bytes(Scenario::WrongMakerSlots)).unwrap();
+        assert_eq!(
+            validate_maker_accounts(&tx.message, &maker_accounts()).unwrap_err(),
+            MakerValidationError::LegNotFound
+        );
     }
 
     fn maker_accounts() -> MakerAccounts {

@@ -5,8 +5,32 @@ Offline decoder for OKX `dex-solana-v3` transactions carrying
 co-sign an untrusted transaction.
 
 The library has no Solana RPC or `solana-sdk` dependency. It parses legacy and
-v0 messages, decodes RFQ route data, and validates the maker's protected
+v0/v1 messages, decodes RFQ route data, and validates the maker's protected
 accounts from static account indices.
+
+## Transaction v1
+
+V1 support follows [SIMD-0385](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0385-transaction-v1.md).
+V1 transactions start with `0x81`,
+contain all account addresses directly, and end with signatures. There is no
+signature-count prefix or ALT section.
+
+The existing decode functions accept v1. For message-only functions, supply
+only the signed bytes before the signatures. `recent_blockhash` holds the v1
+`LifetimeSpecifier`. `transaction_config: Option<V1TransactionConfig>` retains
+the mask and its configuration words. Masks with bits outside `0x1f` are
+rejected. Its accessors
+return the specified defaults for absent fields. Compute-budget instructions
+remain in the instruction list; they do not override v1 header configuration.
+
+The parser checks v1 size/count limits, account/header constraints, indices,
+priority-fee mask bits, heap size, and trailing bytes. It does not verify
+signatures or simulate execution. Existing maker-account checks also apply to
+v1. The CLI requests `maxSupportedTransactionVersion: 1` from RPC; the RPC node
+must support v1 to return v1 transactions.
+
+Adding the configuration field changes public struct literals: set
+`transaction_config: None` for legacy/v0 messages.
 
 ## ALT model
 

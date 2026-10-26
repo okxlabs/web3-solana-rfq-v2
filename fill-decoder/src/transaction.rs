@@ -9,7 +9,7 @@ use crate::idl_types::EntrypointKind;
 use crate::types::{DecodedFill, FillCountError};
 use crate::wire::{
     AddressTableLookup, CompiledInstruction, MessageHeader, MessageVersion, ParsedMessage,
-    ParsedTransaction,
+    ParsedTransaction, V1TransactionConfig,
 };
 
 const MAX_ACCOUNT_KEYS: usize = u8::MAX as usize + 1;
@@ -32,6 +32,8 @@ pub struct DecodedInstruction {
 pub struct DecodedMessage {
     pub version: MessageVersion,
     pub header: MessageHeader,
+    /// SIMD-0385 header configuration; absent for legacy/v0.
+    pub transaction_config: Option<V1TransactionConfig>,
     pub recent_blockhash: [u8; 32],
     /// Pubkeys encoded directly in the message. Signers are always static.
     pub static_account_keys: Vec<[u8; 32]>,
@@ -163,6 +165,7 @@ pub(crate) fn decode_message(parsed: ParsedMessage) -> Result<DecodedMessage> {
     Ok(DecodedMessage {
         version: parsed.version,
         header: parsed.header,
+        transaction_config: parsed.transaction_config,
         recent_blockhash: parsed.recent_blockhash,
         static_account_keys: parsed.static_account_keys,
         instructions,
@@ -244,6 +247,7 @@ mod tests {
     fn msg(instructions: Vec<DecodedInstruction>) -> DecodedMessage {
         DecodedMessage {
             version: MessageVersion::Legacy,
+            transaction_config: None,
             header: MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
@@ -304,6 +308,7 @@ mod tests {
     fn counts_dynamic_indices_without_loading_alt_contents() {
         let parsed = ParsedMessage {
             version: MessageVersion::V0,
+            transaction_config: None,
             header: MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
@@ -332,6 +337,7 @@ mod tests {
     fn rejects_out_of_range_instruction_index() {
         let parsed = ParsedMessage {
             version: MessageVersion::Legacy,
+            transaction_config: None,
             header: MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
@@ -355,6 +361,7 @@ mod tests {
             signatures: vec![],
             message: ParsedMessage {
                 version: MessageVersion::Legacy,
+                transaction_config: None,
                 header: MessageHeader {
                     num_required_signatures: 1,
                     num_readonly_signed_accounts: 0,
