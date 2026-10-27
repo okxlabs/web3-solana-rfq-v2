@@ -307,6 +307,7 @@ mod tests {
         accounts[offset + LEG_MAKER_QUOTE_TOKEN_ACCOUNT] = 2;
         DecodedMessage {
             version: MessageVersion::V0,
+            transaction_config: None,
             header: MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,

@@ -158,7 +158,7 @@ async fn fetch_tx_base64(url: &str, sig: &str) -> Result<String, String> {
         "method": "getTransaction",
         "params": [
             sig,
-            {"encoding": "base64", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}
+            {"encoding": "base64", "maxSupportedTransactionVersion": 1, "commitment": "confirmed"}
         ]
     });
     let client = reqwest::Client::new();
@@ -193,6 +193,9 @@ fn print_human(
         tx.message.loaded_writable_count, tx.message.loaded_readonly_count
     );
     println!("  ixs:        {}", tx.message.instructions.len());
+    if let Some(config) = &tx.message.transaction_config {
+        println!("  v1 config:  {config:?}");
+    }
 
     if !tx.message.address_table_lookups.is_empty() {
         println!("  ALTs:");
@@ -344,6 +347,14 @@ fn print_json(
     let out = serde_json::json!({
         "version": format!("{:?}", tx.message.version),
         "signature_count": tx.signatures.len(),
+        "transaction_config": tx.message.transaction_config.as_ref().map(|config| serde_json::json!({
+            "mask": config.mask,
+            "values": config.values,
+            "priority_fee_lamports": config.priority_fee_lamports(),
+            "compute_unit_limit": config.compute_unit_limit(),
+            "loaded_accounts_data_size_limit": config.loaded_accounts_data_size_limit(),
+            "heap_size": config.heap_size(),
+        })),
         "static_account_count": tx.message.static_account_keys.len(),
         "loaded_writable_count": tx.message.loaded_writable_count,
         "loaded_readonly_count": tx.message.loaded_readonly_count,
