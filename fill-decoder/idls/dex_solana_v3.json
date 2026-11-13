@@ -9,6 +9,9 @@
   "instructions": [
     {
       "name": "claim",
+      "docs": [
+        "Claim an exact amount in the asset's smallest unit (lamports or token base units)."
+      ],
       "discriminator": [
         62,
         198,
@@ -42,8 +45,11 @@
         },
         {
           "name": "sa_authority",
-          "writable": true,
-          "address": "ARu4n5mFdZogZAravu7CcizaojWnS6oqka37gdLT5SZn"
+          "docs": [
+            "(== legacy `authority_pda::ID`) remains accepted byte-for-byte; shards",
+            "1..=7 unlock the multi-SA scaling path. Lookup is O(SA_SHARDS)."
+          ],
+          "writable": true
         },
         {
           "name": "token_mint",
@@ -63,7 +69,12 @@
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "claim_cashback_pumpfun",
@@ -86,10 +97,11 @@
         {
           "name": "sa_authority",
           "docs": [
-            "PumpFun transfers claimed SOL directly to this account (account[0] in the CPI)."
+            "per-shard `user_volume_accumulator` PDA is derived by PumpFun off this",
+            "key, so caller must pair them consistently; PumpFun's CPI will fail",
+            "otherwise (we don't re-derive in-program — keeps CU flat)."
           ],
-          "writable": true,
-          "address": "ARu4n5mFdZogZAravu7CcizaojWnS6oqka37gdLT5SZn"
+          "writable": true
         },
         {
           "name": "user_volume_accumulator",
@@ -140,8 +152,12 @@
         },
         {
           "name": "sa_authority",
-          "writable": true,
-          "address": "ARu4n5mFdZogZAravu7CcizaojWnS6oqka37gdLT5SZn"
+          "docs": [
+            "per-shard `user_volume_accumulator` PDA is derived by PumpSwap off this",
+            "key, so caller must pair them consistently; PumpSwap's CPI will fail",
+            "otherwise (we don't re-derive in-program — keeps CU flat)."
+          ],
+          "writable": true
         },
         {
           "name": "user_volume_accumulator",
@@ -429,22 +445,11 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "remains compatible with the legacy `[SEED_SA]` PDA, while shards 1..=7",
+            "use their indexed PDA derivations."
+          ],
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -475,33 +480,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -576,33 +555,7 @@
           "name": "destination_mint"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -695,33 +648,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -826,33 +753,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -967,33 +868,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1063,22 +938,11 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "remains compatible with the legacy `[SEED_SA]` PDA, while shards 1..=7",
+            "use their indexed PDA derivations."
+          ],
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -1109,33 +973,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1256,33 +1094,7 @@
           "optional": true
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1400,33 +1212,7 @@
           "name": "token_ledger"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1495,22 +1281,7 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -1549,33 +1320,7 @@
           "writable": true
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1650,22 +1395,7 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -1700,33 +1430,7 @@
           "writable": true
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1840,33 +1544,7 @@
           "name": "token_ledger"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -1932,22 +1610,7 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -1982,33 +1645,7 @@
           "writable": true
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -2119,33 +1756,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -2252,33 +1863,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -2344,22 +1929,11 @@
         },
         {
           "name": "sa_authority",
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  107,
-                  120,
-                  95,
-                  115,
-                  97
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "remains compatible with the legacy `[SEED_SA]` PDA, while shards 1..=7",
+            "use their indexed PDA derivations."
+          ],
+          "optional": true
         },
         {
           "name": "source_token_sa",
@@ -2390,33 +1964,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -2528,33 +2076,7 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -2674,33 +2196,7 @@
           "writable": true
         },
         {
-          "name": "event_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  95,
-                  95,
-                  101,
-                  118,
-                  101,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              }
-            ]
-          }
+          "name": "event_authority"
         },
         {
           "name": "program"
@@ -3411,6 +2907,41 @@
       "code": 6116,
       "name": "FeePayerMustSign",
       "msg": "Fee payer must be a signer"
+    },
+    {
+      "code": 6117,
+      "name": "InvalidClaimAmount",
+      "msg": "Claim amount must be greater than zero"
+    },
+    {
+      "code": 6118,
+      "name": "InvalidClaimDestination",
+      "msg": "Invalid claim destination"
+    },
+    {
+      "code": 6119,
+      "name": "CrossShardSaMismatch",
+      "msg": "Cross-shard SA / WSOL_SA mismatch"
+    },
+    {
+      "code": 6120,
+      "name": "PumpMultiHopInvalidHopCount",
+      "msg": "Pump native multi-hop requires 2 to 6 internal hops"
+    },
+    {
+      "code": 6121,
+      "name": "PumpMultiHopInvalidRoute",
+      "msg": "Pump native multi-hop route exceeds the supported resource limits"
+    },
+    {
+      "code": 6122,
+      "name": "PumpMultiHopUnsupportedVenue",
+      "msg": "Pump native multi-hop venue is unsupported or not currently tradable"
+    },
+    {
+      "code": 6123,
+      "name": "InvalidUserVolumeAccumulator",
+      "msg": "Invalid user volume accumulator"
     }
   ],
   "types": [
@@ -4154,6 +3685,116 @@
           },
           {
             "name": "Deriverse"
+          },
+          {
+            "name": "MSwap"
+          },
+          {
+            "name": "ByrealClmm3"
+          },
+          {
+            "name": "JupiterLendAmm",
+            "fields": [
+              {
+                "name": "oracle_accounts_count",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "Flowdesk"
+          },
+          {
+            "name": "TesseraV2"
+          },
+          {
+            "name": "GatorSwap",
+            "fields": [
+              {
+                "name": "tox_engaged",
+                "docs": [
+                  "Inserts the readonly `toxmdl` PDA before guest / fee mint / refs.",
+                  "Computed from the SDK's resolved config, router slot and model blob."
+                ],
+                "type": "bool"
+              },
+              {
+                "name": "ref_account_count",
+                "docs": [
+                  "Only reference-pool accounts: Ray=12 / Pump=23 / Met=8 / Dlmm=2 /",
+                  "Whirl=2 per group. Excludes toxmdl, guest and fee mint."
+                ],
+                "type": "u8"
+              },
+              {
+                "name": "seq",
+                "docs": [
+                  "The exact pool sequence signed off-chain; do not replace it with a",
+                  "newer on-chain sequence while constructing the CPI data."
+                ],
+                "type": "u64"
+              },
+              {
+                "name": "signature",
+                "docs": [
+                  "Ed25519 signature over swap_authority || pool || seq(LE) || input_mint.",
+                  "The protocol's router account carries the verification public key."
+                ],
+                "type": {
+                  "array": [
+                    "u8",
+                    64
+                  ]
+                }
+              },
+              {
+                "name": "has_fee_mint",
+                "docs": [
+                  "Physically includes the base mint after guest when the resolved v3",
+                  "Token-2022 mint has a TransferFeeConfig extension. No absent slot."
+                ],
+                "type": "bool"
+              }
+            ]
+          },
+          {
+            "name": "NativePamm"
+          },
+          {
+            "name": "PumpfunBuyV3"
+          },
+          {
+            "name": "PumpfunSellV3"
+          },
+          {
+            "name": "PumpswapBuyV2"
+          },
+          {
+            "name": "PumpswapSellV2"
+          },
+          {
+            "name": "SendfunLaunchpad"
+          },
+          {
+            "name": "SendfunDexAmm"
+          },
+          {
+            "name": "Obsidian"
+          },
+          {
+            "name": "PumpMultiHop",
+            "fields": [
+              {
+                "name": "hop_count",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "ObsidianV1"
+          },
+          {
+            "name": "MeteoraDlmmPro"
           }
         ]
       }
@@ -4260,6 +3901,70 @@
                 "type": "u64"
               }
             ]
+          },
+          {
+            "name": "HumidifiSwapRouter",
+            "fields": [
+              {
+                "name": "router_id",
+                "type": "u64"
+              },
+              {
+                "name": "claimed_ms",
+                "type": "u64"
+              },
+              {
+                "name": "seed_rng",
+                "type": {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                }
+              },
+              {
+                "name": "token",
+                "type": {
+                  "array": [
+                    "u8",
+                    16
+                  ]
+                }
+              },
+              {
+                "name": "end_user",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "ScorchV2",
+            "fields": [
+              {
+                "name": "id",
+                "type": "u128"
+              }
+            ]
+          },
+          {
+            "name": "TesseraV2"
+          },
+          {
+            "name": "ZerofiWithSig",
+            "fields": [
+              {
+                "name": "signature",
+                "type": {
+                  "array": [
+                    "u8",
+                    40
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "Kipseli"
           }
         ]
       }
@@ -4305,7 +4010,8 @@
               "bit 6: output token type is native SOL (1=yes, 0=no)",
               "bit 5: SA creation rent funded by fee payer (1=yes, gas station)",
               "bit 4: truncate input amount to source balance (swap-max / sell-all opt-in)",
-              "bit 0-3: reserved"
+              "bit 3: positive-slippage fee mode (0=m0 trim/charge two-tier, 1=m1 flat profit %)",
+              "bit 0-2: reserved"
             ],
             "type": "u8"
           },

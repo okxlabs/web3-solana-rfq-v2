@@ -78,11 +78,12 @@ pub const AGGREGATOR_IDL_JSON: &str = include_str!("../idls/dex_solana_v3.json")
 /// Returns the entrypoint kind plus one [`DecodedFill`] per `Dex::SolRfqV2`
 /// leg in the entrypoint's `SwapArgs.routes`. Returns `(None, [])` when the
 /// instruction is not a known swap entrypoint. Rejected `swap_tob*` entrypoints
-/// return `(Unsupported, [])`. Legs whose `taker_side` byte is neither 0 nor 1
-/// are silently skipped (they would revert on chain).
-pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> (Option<EntrypointKind>, Vec<DecodedFill>) {
-    let Some(args) = decode_swap_args(data) else {
-        return (None, Vec::new());
+/// return `(Unsupported, [])`. Malformed supported instructions return an error.
+pub(crate) fn decode_solrfqv2_legs(
+    data: &[u8],
+) -> std::io::Result<(Option<EntrypointKind>, Vec<DecodedFill>)> {
+    let Some(args) = decode_swap_args(data)? else {
+        return Ok((None, Vec::new()));
     };
     let kind = args.kind();
     let fills = args
@@ -103,7 +104,7 @@ pub(crate) fn decode_solrfqv2_legs(data: &[u8]) -> (Option<EntrypointKind>, Vec<
             Dex::Other(_) => None,
         })
         .collect();
-    (Some(kind), fills)
+    Ok((Some(kind), fills))
 }
 
 #[cfg(test)]
@@ -169,7 +170,7 @@ mod tests {
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 8_510_000_000, vec![route]);
 
-        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(kind, Some(EntrypointKind::Concrete));
         assert_eq!(fills.len(), 1);
         let f = &fills[0];
@@ -186,7 +187,7 @@ mod tests {
         let ix_data =
             encode_swap_args_ix([127, 214, 107, 189, 23, 90, 47, 104], 7, 1_000, vec![route]);
 
-        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(kind, Some(EntrypointKind::Concrete));
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
@@ -204,7 +205,7 @@ mod tests {
             entrypoint::SWAP_TOC_V3,
         ] {
             let ix_data = encode_swap_args_ix(disc, 7, 1_000, vec![route.clone()]);
-            let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+            let (kind, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
             assert_eq!(kind, Some(EntrypointKind::Concrete));
             assert_eq!(fills.len(), 1);
             assert_eq!(fills[0].rfq_id, 42);
@@ -225,7 +226,7 @@ mod tests {
             entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER,
             entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER_V3,
         ] {
-            let (kind, fills) = decode_solrfqv2_legs(&disc);
+            let (kind, fills) = decode_solrfqv2_legs(&disc).unwrap();
             assert_eq!(kind, Some(EntrypointKind::Unsupported));
             assert!(fills.is_empty());
         }
@@ -244,19 +245,17 @@ mod tests {
         );
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 100, vec![route]);
-        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(fills[0].taker_side, Side::Ask);
     }
 
     #[test]
-    fn invalid_taker_side_byte_skips_leg() {
-        // taker_side = 2 is neither Bid (0) nor Ask (1); leg is silently dropped.
+    fn invalid_taker_side_returns_error() {
         let dex = encode_sol_rfq_v2_variant(2, 42, 2_000_000_000, &[]);
         let route = encode_route(&dex, 10_000, 0x01);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 7, 100, vec![route]);
-        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
-        assert_eq!(kind, Some(EntrypointKind::Concrete));
-        assert!(fills.is_empty());
+        let err = decode_solrfqv2_legs(&ix_data).unwrap_err();
+        assert!(err.to_string().contains("route 0: invalid RfqSide tag 2"));
     }
 
     #[test]
@@ -266,7 +265,7 @@ mod tests {
         let r1 = encode_route(&dex1, 3_000, 0x01);
         let r2 = encode_route(&dex2, 7_000, 0x02);
         let ix_data = encode_swap_args_ix(entrypoint::PROXY_SWAP, 9, 10_000, vec![r1, r2]);
-        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(fills.len(), 2);
         assert_eq!(fills[0].taker_side, Side::Bid);
         assert_eq!(fills[0].rfq_id, 1);
@@ -289,7 +288,7 @@ mod tests {
         let r2 = encode_route(&dex_v2, 5_000, 0x02);
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![r1, r2]);
 
-        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }
@@ -306,7 +305,7 @@ mod tests {
         );
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![first, second]);
 
-        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }
@@ -323,7 +322,7 @@ mod tests {
         );
         let ix_data = encode_swap_args_ix(entrypoint::SWAP, 0, 10_000, vec![first, second]);
 
-        let (_, fills) = decode_solrfqv2_legs(&ix_data);
+        let (_, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].rfq_id, 42);
     }
@@ -331,7 +330,7 @@ mod tests {
     #[test]
     fn unknown_entrypoint_returns_empty() {
         let ix_data = encode_swap_args_ix([0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0], 0, 0, vec![]);
-        let (kind, fills) = decode_solrfqv2_legs(&ix_data);
+        let (kind, fills) = decode_solrfqv2_legs(&ix_data).unwrap();
         assert_eq!(kind, None);
         assert!(fills.is_empty());
     }

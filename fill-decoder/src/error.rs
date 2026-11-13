@@ -14,6 +14,13 @@ pub enum FillDecoderError {
     #[error("Borsh deserialization failed: {0}")]
     Borsh(String),
 
+    #[error("aggregator instruction {instruction_index} decode failed: {source}")]
+    AggregatorInstruction {
+        instruction_index: usize,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("internal: {0}")]
     Other(String),
 }
