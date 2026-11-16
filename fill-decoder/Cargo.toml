@@ -19,6 +19,9 @@ default = []
 # Pulls in CLI deps (clap, reqwest, tokio, serde_json). Lib stays minimal without it.
 cli = ["clap", "reqwest", "tokio", "serde_json"]
 
+[dev-dependencies]
+serde_json = "1"
+
 [dependencies]
 borsh = { version = "1", features = ["derive"] }
 bs58 = "0.5"

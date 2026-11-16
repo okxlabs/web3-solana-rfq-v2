@@ -194,6 +194,11 @@ pub struct DecodedInstruction {
 `total_account_count()` includes the number of selected writable and readonly
 ALT indices without resolving their addresses.
 
+Malformed args in supported aggregator swap instructions return the existing
+`FillDecoderError::Borsh(String)` with the instruction index and decode cause,
+rather than an empty RFQ list. The low-level `idl_types::decode_swap_args` keeps
+its `Option<AnySwapArgs>` signature and returns `None` for malformed args.
+
 ## Signing checklist
 
 1. Require exactly one SolRfqV2 leg.
