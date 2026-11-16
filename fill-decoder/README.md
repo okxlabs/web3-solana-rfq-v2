@@ -194,62 +194,21 @@ pub struct DecodedInstruction {
 `total_account_count()` includes the number of selected writable and readonly
 ALT indices without resolving their addresses.
 
-## IDL-driven route decoding
+## Compatibility with 0.1.0
 
-`build.rs` generates Dex field readers and instruction discriminators from
-`idls/dex_solana_v3.json`. It reads nested structs, enums, arrays and vectors
-without a hand-maintained table of variant tags or body sizes. The generated
-code does not parse JSON or fetch IDLs at runtime. `serde_json` is only a build,
-test, or CLI dependency.
+Version 0.1.1 retains the public `idl_types::decode_swap_args` signature
+(`Option<AnySwapArgs>`) and the existing `FillDecoderError` variants.
+Downstream exhaustive error matches do not need a wildcard arm.
 
-The pinned IDL comes from `GitHub-Web3-DEX-Solana/target/idl/dex_solana_v3.json`
-at source commit `a81fe5e87596affc0486db5377e94066a6fa80aa`. It includes
-`PumpswapSellV2` (tag 146). Use a reviewed IDL that matches the target Router
-deployment; the source commit alone does not prove which version is deployed.
+The low-level compatibility wrapper still returns `None` for unknown
+entrypoints or malformed args. Transaction and message decoding use an
+internal strict decoder: malformed supported swaps and invalid RFQ side tags
+now return `FillDecoderError::Borsh(String)` instead of an empty fill list.
+The error text includes the instruction index, and route errors also include
+the route index and the specific cause.
 
-To support new aggregator variants:
-
-1. Replace the pinned IDL with the reviewed upstream IDL.
-2. Run `cargo test -p fill-decoder --all-features`.
-3. Rebuild and release the decoder before the Router upgrade.
-
-New variants using supported IDL field types need no Rust layout changes.
-Unsupported IDL type forms or changes to the public RFQ layout fail the build.
-The handwritten `SwapArgs`, `SwapArgsTokenLedger`, and `Route` layouts are
-also checked against the IDL at build time, including field order and types.
-Existing binaries cannot learn new layouts without an update.
-
-For malformed supported swap instructions, transaction and message decoding
-now return `FillDecoderError::AggregatorInstruction`, for example:
-
-```text
-aggregator instruction 2 decode failed: route 0: unknown Dex variant tag 255 in embedded aggregator IDL
-```
-
-Instruction and route indices are zero-based. No partial fills are returned.
-A valid swap without an RFQ still produces `FillCountError::NotFound` from
-`single_fill()`. Unknown instruction discriminators remain ignored, and the
-existing rejection policy for `swap_tob*` entrypoints is unchanged.
-
-The public `idl_types::decode_swap_args` function now returns
-`std::io::Result<Option<AnySwapArgs>>` instead of `Option<AnySwapArgs>`.
-Invalid RFQ side tags also return a decode error instead of dropping the leg.
-
-## Upgrading from 0.1 to 0.2
-
-Version 0.2 includes breaking API changes:
-
-- `idl_types::decode_swap_args` now returns
-  `std::io::Result<Option<AnySwapArgs>>`. Handle the error (or propagate it
-  with `?`) before matching the `Option`.
-- `FillDecoderError` adds `AggregatorInstruction` and is now
-  `#[non_exhaustive]`. Downstream error matches must include a wildcard arm.
-  This permits new error variants in later compatible releases.
-- Malformed supported swaps and invalid RFQ side tags now return decode errors
-  instead of producing an empty fill list.
-
-For Git dependencies, update the pinned revision and lockfile. If the dependency
-also specifies `version = "0.1"`, change that requirement to `"0.2"`.
+For Git dependencies, update the pinned revision and lockfile. An existing
+`version = "0.1"` requirement remains valid.
 
 ## Signing checklist
 
@@ -267,4 +226,8 @@ also specifies `version = "0.1"`, change that requirement to `"0.2"`.
 ```sh
 cargo test -p fill-decoder
 cargo test -p fill-decoder --all-features
+cargo test -p fill-decoder-codegen
+cargo run -p fill-decoder-codegen -- --check
 ```
+
+For IDL updates and generated source review, see [codegen/README.md](codegen/README.md).

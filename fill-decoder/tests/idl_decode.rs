@@ -12,14 +12,16 @@ use serde_json::Value;
 const TX: &str = include_str!("fixtures/pumpswap_rfq_jupiter_v1.b64");
 
 // Fixture offsets within swap instruction data:
-// discriminator + three u64 fields + slippage u16 + routes Vec length u32.
-const ROUTE_0_DEX: usize = 8 + 8 * 3 + 2 + 4; // 38
-                                              // Route 0: unit Dex tag u8 + weight u16 + routing index u8.
-const ROUTE_1_DEX: usize = ROUTE_0_DEX + 1 + 2 + 1; // 42
-const ROUTE_1_SIDE: usize = ROUTE_1_DEX + 1; // RFQ tag + taker_side = offset 43
-                                             // RFQ Dex: tag + side + rfq_id + expire_at + levels length + two 16-byte levels.
-const RFQ_DEX_BYTES: usize = 1 + 1 + 8 + 8 + 4 + 2 * 16; // 54
-const ROUTE_2_DEX: usize = ROUTE_1_DEX + RFQ_DEX_BYTES + 2 + 1; // 99
+// discriminator + three u64 fields + slippage u16 + routes Vec length u32 = 38.
+const ROUTE_0_DEX: usize = 8 + 8 * 3 + 2 + 4;
+// Route 0: unit Dex tag u8 + weight u16 + routing index u8 = 4 bytes; offset 42.
+const ROUTE_1_DEX: usize = ROUTE_0_DEX + 1 + 2 + 1;
+// Route 1 RFQ tag + taker_side = offset 43.
+const ROUTE_1_SIDE: usize = ROUTE_1_DEX + 1;
+// RFQ Dex: tag + side + rfq_id + expire_at + levels length + two levels = 54 bytes.
+const RFQ_DEX_BYTES: usize = 1 + 1 + 8 + 8 + 4 + 2 * 16;
+// Route 1 Dex + weight u16 + routing index u8 = 57 bytes; route 2 starts at 99.
+const ROUTE_2_DEX: usize = ROUTE_1_DEX + RFQ_DEX_BYTES + 2 + 1;
 
 fn raw_tx() -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
@@ -71,19 +73,36 @@ fn swap_offset_ignores_discriminator_bytes_in_a_pubkey() {
 
 fn assert_decode_error(bytes: &[u8], expected: &str) {
     let err = decode_transaction_bytes(bytes).unwrap_err();
-    assert!(matches!(
-        err,
-        FillDecoderError::AggregatorInstruction {
-            instruction_index: 2,
-            ..
-        }
-    ));
+    assert!(matches!(err, FillDecoderError::Borsh(_)));
     let message = err.to_string();
+    assert!(
+        message.contains("aggregator instruction 2 decode failed:"),
+        "{message}"
+    );
     assert!(message.contains(expected), "{message}");
     assert!(!message.contains("no SolRfqV2 leg"));
     // v1 message-only input excludes the two trailing signatures.
     let message_err = decode_message_bytes(&bytes[..bytes.len() - 128]).unwrap_err();
     assert_eq!(message_err.to_string(), message);
+}
+
+#[test]
+fn error_enum_remains_exhaustive_for_existing_callers() {
+    // This is an external-crate match: a new variant or #[non_exhaustive]
+    // would break compilation just as it would for existing SDK callers.
+    fn legacy_error_kind(error: &FillDecoderError) -> &'static str {
+        match error {
+            FillDecoderError::InvalidEncoding => "encoding",
+            FillDecoderError::Truncated { .. } => "truncated",
+            FillDecoderError::NonCanonicalCompactU16 => "compact-u16",
+            FillDecoderError::Borsh(_) => "borsh",
+            FillDecoderError::Other(_) => "other",
+        }
+    }
+    assert_eq!(
+        legacy_error_kind(&FillDecoderError::Borsh("test".into())),
+        "borsh"
+    );
 }
 
 #[test]
@@ -133,8 +152,10 @@ fn invalid_rfq_side_returns_error_instead_of_no_fill() {
     assert_decode_error(&bytes, "route 1: invalid RfqSide tag 2");
 }
 
-// Independent test encoder: use non-empty vectors and the last nested enum
-// variant to exercise lengths and newly added DynamicCandidate layouts.
+// IDL-based test encoder: use non-empty vectors and the last nested enum
+// variant to exercise cursor lengths. This shares the generator's IDL model,
+// so it is not an independent wire-format oracle or full nested-enum coverage.
+// The real transaction fixture above provides a separate regression check.
 fn encode_type(ty: &Value, types: &[Value], out: &mut Vec<u8>) {
     if let Some(name) = ty.as_str() {
         let len = match name {

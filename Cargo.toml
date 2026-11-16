@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "programs/*",
-    "fill-decoder"
+    "fill-decoder",
+    "fill-decoder/codegen"
 ]
 resolver = "2"
 

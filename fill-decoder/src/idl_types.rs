@@ -1,11 +1,11 @@
-//! Public swap types with Dex field readers generated from the embedded
-//! aggregator IDL at build time. Update the IDL and rebuild for new variants.
+//! Public swap types with checked-in Dex readers generated from the embedded
+//! aggregator IDL. Run `cargo run -p fill-decoder-codegen` after an IDL update.
 
 use crate::types::Level;
 use borsh::io::Read;
 use borsh::BorshDeserialize;
 
-include!(concat!(env!("OUT_DIR"), "/aggregator_idl.rs"));
+include!("generated/aggregator_idl.rs");
 
 /// `Dex` enum mirror. Only the SolRfqV2 variant carries data we need;
 /// all other variants are reduced to their tag byte after their exact body
@@ -75,14 +75,7 @@ impl BorshDeserialize for SwapArgs {
         let amount_in = u64::deserialize_reader(reader)?;
         let expect_amount_out = u64::deserialize_reader(reader)?;
         let slippage = u16::deserialize_reader(reader)?;
-        let count = u32::deserialize_reader(reader)?;
-        let mut routes = Vec::new();
-        for index in 0..count {
-            let route = Route::deserialize_reader(reader).map_err(|err| {
-                borsh::io::Error::new(err.kind(), format!("route {index}: {err}"))
-            })?;
-            routes.push(route);
-        }
+        let routes = read_routes(reader)?;
         Ok(Self {
             order_id,
             amount_in,
@@ -93,14 +86,36 @@ impl BorshDeserialize for SwapArgs {
     }
 }
 
+fn read_routes<R: Read>(reader: &mut R) -> borsh::io::Result<Vec<Route>> {
+    let count = u32::deserialize_reader(reader)?;
+    let mut routes = Vec::new();
+    for index in 0..count {
+        let route = Route::deserialize_reader(reader)
+            .map_err(|err| borsh::io::Error::new(err.kind(), format!("route {index}: {err}")))?;
+        routes.push(route);
+    }
+    Ok(routes)
+}
+
 /// Token-ledger variants don't carry `amount_in` on the wire — it's derived
 /// from the token-ledger account at execution time.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwapArgsTokenLedger {
     pub order_id: u64,
     pub expect_amount_out: u64,
     pub slippage: u16,
     pub routes: Vec<Route>,
+}
+
+impl BorshDeserialize for SwapArgsTokenLedger {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        Ok(Self {
+            order_id: u64::deserialize_reader(reader)?,
+            expect_amount_out: u64::deserialize_reader(reader)?,
+            slippage: u16::deserialize_reader(reader)?,
+            routes: read_routes(reader)?,
+        })
+    }
 }
 
 /// Unified view: routes are all we care about regardless of which
@@ -157,44 +172,20 @@ impl core::fmt::Display for EntrypointKind {
     }
 }
 
-/// Match the first 8 bytes of an instruction's data against the known swap
-/// entrypoint discriminators. Returns the decoded args (skipping any
-/// per-entrypoint suffix fields like commission_info), an explicit
-/// `Unsupported` marker for the rejected `swap_tob*` family, or `None` if no
-/// discriminator matched. Malformed args in a supported entrypoint return an
-/// error with the route index; they are never treated as an absent RFQ.
-pub fn decode_swap_args(data: &[u8]) -> borsh::io::Result<Option<AnySwapArgs>> {
-    if data.len() < 8 {
-        return Ok(None);
-    }
-    let mut disc = [0u8; 8];
-    disc.copy_from_slice(&data[..8]);
-    let body = &data[8..];
+/// Decode a known swap entrypoint, ignoring suffix fields after the swap args.
+/// Rejected `swap_tob*` entrypoints return an explicit `Unsupported` marker.
+///
+/// This compatibility API returns `None` for both unknown discriminators and
+/// malformed supported args. Use the transaction or message decode APIs when
+/// the caller needs the specific decode error.
+pub fn decode_swap_args(data: &[u8]) -> Option<AnySwapArgs> {
+    try_decode_swap_args(data).ok().flatten()
+}
 
-    // Try the simple SwapArgs entrypoints first; suffix fields after the args
-    // are ignored by Borsh-from-reader (it stops at end of struct definition).
-    let try_swap_args = |body: &[u8]| {
-        let mut reader = std::io::Cursor::new(body);
-        SwapArgs::deserialize_reader(&mut reader).map(|args| Some(AnySwapArgs::Concrete(args)))
-    };
-    match disc {
-        entrypoint::SWAP
-        | entrypoint::PROXY_SWAP
-        | entrypoint::SWAP_TOC
-        | entrypoint::SWAP_TOC_V2
-        | entrypoint::SWAP_TOC_V3 => try_swap_args(body),
-        entrypoint::SWAP_TOB
-        | entrypoint::SWAP_TOB_V2
-        | entrypoint::SWAP_TOB_V3
-        | entrypoint::SWAP_TOB_WITH_RECEIVER
-        | entrypoint::SWAP_TOB_WITH_RECEIVER_V3
-        | entrypoint::SWAP_TOB_ENHANCED
-        | entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER
-        | entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER_V3
-        | entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER
-        | entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER_V3 => Ok(Some(AnySwapArgs::Unsupported)),
-        _ => Ok(None),
-    }
+/// Strict internal decoder. Errors remain available to transaction/message
+/// callers instead of being converted into an empty RFQ list.
+pub(crate) fn try_decode_swap_args(data: &[u8]) -> borsh::io::Result<Option<AnySwapArgs>> {
+    decode_idl_swap_args(data)
 }
 
 /// Hand-encode a `Dex::SolRfqV2` variant body for tests (the variant has
@@ -222,6 +213,68 @@ pub(crate) fn encode_sol_rfq_v2_variant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_swap_decoder_keeps_its_option_signature() {
+        let decode: fn(&[u8]) -> Option<AnySwapArgs> = decode_swap_args;
+        let mut valid = entrypoint::SWAP.to_vec();
+        // Three u64 args, slippage u16, and an empty routes Vec.
+        valid.extend_from_slice(&[0; 8 * 3 + 2 + 4]);
+        assert!(matches!(decode(&valid), Some(AnySwapArgs::Concrete(_))));
+        assert!(matches!(
+            decode(&entrypoint::SWAP_TOB),
+            Some(AnySwapArgs::Unsupported)
+        ));
+        assert!(decode(&[]).is_none());
+        assert!(decode(&[255; 8]).is_none());
+        assert!(decode(&entrypoint::SWAP).is_none());
+
+        // A malformed route is hidden only by the compatibility wrapper.
+        valid[34..38].copy_from_slice(&1u32.to_le_bytes());
+        valid.push(255);
+        assert!(decode(&valid).is_none());
+        let error = try_decode_swap_args(&valid).err().unwrap();
+        assert!(error
+            .to_string()
+            .contains("route 0: unknown Dex variant tag 255"));
+    }
+
+    #[test]
+    fn both_swap_arg_shapes_report_route_indices() {
+        // Two routes: a valid unit variant, followed by an invalid Dex tag.
+        for token_ledger in [false, true] {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&7u64.to_le_bytes()); // order_id
+            if !token_ledger {
+                bytes.extend_from_slice(&100u64.to_le_bytes()); // amount_in
+            }
+            bytes.extend_from_slice(&0u64.to_le_bytes()); // expect_amount_out
+            bytes.extend_from_slice(&0u16.to_le_bytes()); // slippage
+            bytes.extend_from_slice(&2u32.to_le_bytes()); // route count
+            bytes.extend_from_slice(&[2, 0x10, 0x27, 1]); // unit Dex, weight, index
+            bytes.push(255);
+            let error = if token_ledger {
+                SwapArgsTokenLedger::deserialize_reader(&mut &bytes[..]).unwrap_err()
+            } else {
+                SwapArgs::deserialize_reader(&mut &bytes[..]).unwrap_err()
+            };
+            assert!(error
+                .to_string()
+                .contains("route 1: unknown Dex variant tag 255"));
+        }
+    }
+
+    #[test]
+    fn token_ledger_route_truncation_reports_its_index() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(2); // valid unit Dex but missing route weight and index
+        let error = SwapArgsTokenLedger::deserialize_reader(&mut &bytes[..]).unwrap_err();
+        assert!(error.to_string().contains("route 0:"));
+    }
 
     #[test]
     fn decodes_sol_rfq_v2_variant() {

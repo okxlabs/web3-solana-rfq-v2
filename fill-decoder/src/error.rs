@@ -1,11 +1,7 @@
 use thiserror::Error;
 
 /// Transaction and message decoding errors.
-///
-/// New variants may be added in future releases. Downstream `match` expressions
-/// must include a wildcard arm to handle errors they do not yet recognize.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum FillDecoderError {
     #[error("input bytes are not valid base64")]
     InvalidEncoding,
@@ -18,13 +14,6 @@ pub enum FillDecoderError {
 
     #[error("Borsh deserialization failed: {0}")]
     Borsh(String),
-
-    #[error("aggregator instruction {instruction_index} decode failed: {source}")]
-    AggregatorInstruction {
-        instruction_index: usize,
-        #[source]
-        source: std::io::Error,
-    },
 
     #[error("internal: {0}")]
     Other(String),

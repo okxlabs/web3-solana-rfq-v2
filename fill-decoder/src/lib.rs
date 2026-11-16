@@ -105,10 +105,10 @@ fn extract_fills(msg: &mut DecodedMessage) -> Result<()> {
         let program_id = static_account_keys.get(ix.program_id_index as usize);
         if program_id.is_some_and(is_dex_solana_v3_program) {
             let (kind, fills) = aggregator::decode_solrfqv2_legs(&ix.data).map_err(|source| {
-                FillDecoderError::AggregatorInstruction {
-                    instruction_index: ix.instruction_index,
-                    source,
-                }
+                FillDecoderError::Borsh(format!(
+                    "aggregator instruction {} decode failed: {source}",
+                    ix.instruction_index
+                ))
             })?;
             ix.entrypoint = kind;
             ix.fills = fills;

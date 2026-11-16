@@ -9,7 +9,7 @@
 //! 3. For each route whose `dex == Dex::SolRfqV2`, emit a [`DecodedFill`]
 //!    carrying the variant body (`rfq_id`, `expire_at`, `levels`).
 
-use crate::idl_types::{decode_swap_args, Dex, EntrypointKind};
+use crate::idl_types::{try_decode_swap_args, Dex, EntrypointKind};
 use crate::types::{DecodedFill, Side};
 
 /// Base-58 form of the canonical `solana-rfq-v2` program id.
@@ -82,7 +82,7 @@ pub const AGGREGATOR_IDL_JSON: &str = include_str!("../idls/dex_solana_v3.json")
 pub(crate) fn decode_solrfqv2_legs(
     data: &[u8],
 ) -> std::io::Result<(Option<EntrypointKind>, Vec<DecodedFill>)> {
-    let Some(args) = decode_swap_args(data)? else {
+    let Some(args) = try_decode_swap_args(data)? else {
         return Ok((None, Vec::new()));
     };
     let kind = args.kind();

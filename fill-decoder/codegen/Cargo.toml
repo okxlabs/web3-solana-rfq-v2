@@ -1,0 +1,13 @@
+[package]
+name = "fill-decoder-codegen"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+heck = "0.5"
+proc-macro2 = "1"
+quote = "1"
+serde_json = "1"
+syn = { version = "2", features = ["full", "parsing"] }
