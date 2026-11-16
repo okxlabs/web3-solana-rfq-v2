@@ -215,6 +215,8 @@ To support new aggregator variants:
 
 New variants using supported IDL field types need no Rust layout changes.
 Unsupported IDL type forms or changes to the public RFQ layout fail the build.
+The handwritten `SwapArgs`, `SwapArgsTokenLedger`, and `Route` layouts are
+also checked against the IDL at build time, including field order and types.
 Existing binaries cannot learn new layouts without an update.
 
 For malformed supported swap instructions, transaction and message decoding
@@ -232,6 +234,22 @@ existing rejection policy for `swap_tob*` entrypoints is unchanged.
 The public `idl_types::decode_swap_args` function now returns
 `std::io::Result<Option<AnySwapArgs>>` instead of `Option<AnySwapArgs>`.
 Invalid RFQ side tags also return a decode error instead of dropping the leg.
+
+## Upgrading from 0.1 to 0.2
+
+Version 0.2 includes breaking API changes:
+
+- `idl_types::decode_swap_args` now returns
+  `std::io::Result<Option<AnySwapArgs>>`. Handle the error (or propagate it
+  with `?`) before matching the `Option`.
+- `FillDecoderError` adds `AggregatorInstruction` and is now
+  `#[non_exhaustive]`. Downstream error matches must include a wildcard arm.
+  This permits new error variants in later compatible releases.
+- Malformed supported swaps and invalid RFQ side tags now return decode errors
+  instead of producing an empty fill list.
+
+For Git dependencies, update the pinned revision and lockfile. If the dependency
+also specifies `version = "0.1"`, change that requirement to `"0.2"`.
 
 ## Signing checklist
 

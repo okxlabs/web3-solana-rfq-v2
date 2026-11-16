@@ -3,11 +3,23 @@ use borsh::BorshDeserialize;
 use fill_decoder::{
     decode_message_bytes, decode_transaction_base64, decode_transaction_bytes,
     idl_types::{entrypoint, Dex},
-    FillDecoderError, Side, AGGREGATOR_IDL_JSON,
+    is_dex_solana_v3_program,
+    wire::parse_transaction,
+    FillDecoderError, MessageVersion, Side, AGGREGATOR_IDL_JSON,
 };
 use serde_json::Value;
 
 const TX: &str = include_str!("fixtures/pumpswap_rfq_jupiter_v1.b64");
+
+// Fixture offsets within swap instruction data:
+// discriminator + three u64 fields + slippage u16 + routes Vec length u32.
+const ROUTE_0_DEX: usize = 8 + 8 * 3 + 2 + 4; // 38
+                                              // Route 0: unit Dex tag u8 + weight u16 + routing index u8.
+const ROUTE_1_DEX: usize = ROUTE_0_DEX + 1 + 2 + 1; // 42
+const ROUTE_1_SIDE: usize = ROUTE_1_DEX + 1; // RFQ tag + taker_side = offset 43
+                                             // RFQ Dex: tag + side + rfq_id + expire_at + levels length + two 16-byte levels.
+const RFQ_DEX_BYTES: usize = 1 + 1 + 8 + 8 + 4 + 2 * 16; // 54
+const ROUTE_2_DEX: usize = ROUTE_1_DEX + RFQ_DEX_BYTES + 2 + 1; // 99
 
 fn raw_tx() -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
@@ -16,10 +28,45 @@ fn raw_tx() -> Vec<u8> {
 }
 
 fn swap_offset(bytes: &[u8]) -> usize {
-    bytes
-        .windows(8)
-        .position(|w| w == entrypoint::SWAP_TOC)
-        .unwrap()
+    let message = parse_transaction(bytes).unwrap().message;
+    assert_eq!(message.version, MessageVersion::V1);
+    let (index, swap) = message
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, ix)| {
+            is_dex_solana_v3_program(&message.static_account_keys[ix.program_id_index as usize])
+                && ix.data.starts_with(&entrypoint::SWAP_TOC)
+        })
+        .unwrap();
+
+    // V1: version + signer header + config mask + lifetime + ix/key counts,
+    // then static keys, config u32 values, and all four-byte instruction headers.
+    let payload_start = 1
+        + 3
+        + 4
+        + 32
+        + 1
+        + 1
+        + message.static_account_keys.len() * 32
+        + message.transaction_config.as_ref().unwrap().values.len() * 4
+        + message.instructions.len() * 4;
+    let previous_payloads: usize = message.instructions[..index]
+        .iter()
+        .map(|ix| ix.account_indices.len() + ix.data.len())
+        .sum();
+    let start = payload_start + previous_payloads + swap.account_indices.len();
+    assert_eq!(&bytes[start..start + swap.data.len()], swap.data.as_slice());
+    start
+}
+
+#[test]
+fn swap_offset_ignores_discriminator_bytes_in_a_pubkey() {
+    let mut bytes = raw_tx();
+    let expected = swap_offset(&bytes);
+    // V1 static keys begin after the fixed 42-byte header.
+    bytes[42..50].copy_from_slice(&entrypoint::SWAP_TOC);
+    assert_eq!(swap_offset(&bytes), expected);
 }
 
 fn assert_decode_error(bytes: &[u8], expected: &str) {
@@ -57,7 +104,7 @@ fn original_v1_transaction_decodes_without_modification() {
 fn unknown_dex_before_rfq_returns_instruction_route_and_tag() {
     let mut bytes = raw_tx();
     let start = swap_offset(&bytes);
-    bytes[start + 38] = 255;
+    bytes[start + ROUTE_0_DEX] = 255;
     assert_decode_error(&bytes, "route 0: unknown Dex variant tag 255");
 }
 
@@ -65,7 +112,7 @@ fn unknown_dex_before_rfq_returns_instruction_route_and_tag() {
 fn unknown_dex_after_rfq_does_not_return_partial_fill() {
     let mut bytes = raw_tx();
     let start = swap_offset(&bytes);
-    bytes[start + 99] = 255;
+    bytes[start + ROUTE_2_DEX] = 255;
     assert_decode_error(&bytes, "route 2: unknown Dex variant tag 255");
 }
 
@@ -74,7 +121,7 @@ fn truncated_variant_body_returns_error_instead_of_no_fill() {
     let mut bytes = raw_tx();
     let start = swap_offset(&bytes);
     // HumidifiSwapRouter needs 96 body bytes, more than remain in this instruction.
-    bytes[start + 38] = 134;
+    bytes[start + ROUTE_0_DEX] = 134;
     assert_decode_error(&bytes, "route 0:");
 }
 
@@ -82,7 +129,7 @@ fn truncated_variant_body_returns_error_instead_of_no_fill() {
 fn invalid_rfq_side_returns_error_instead_of_no_fill() {
     let mut bytes = raw_tx();
     let start = swap_offset(&bytes);
-    bytes[start + 43] = 2;
+    bytes[start + ROUTE_1_SIDE] = 2;
     assert_decode_error(&bytes, "route 1: invalid RfqSide tag 2");
 }
 

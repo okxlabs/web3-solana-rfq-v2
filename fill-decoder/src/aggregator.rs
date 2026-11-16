@@ -76,9 +76,9 @@ pub fn is_dex_solana_v3_program(pubkey: &[u8; 32]) -> bool {
 pub const AGGREGATOR_IDL_JSON: &str = include_str!("../idls/dex_solana_v3.json");
 
 /// Returns the entrypoint kind plus one [`DecodedFill`] per `Dex::SolRfqV2`
-/// leg in the entrypoint's `SwapArgs.routes`. Returns `(None, [])` when the
+/// leg in the entrypoint's `SwapArgs.routes`. Returns `Ok((None, []))` when the
 /// instruction is not a known swap entrypoint. Rejected `swap_tob*` entrypoints
-/// return `(Unsupported, [])`. Malformed supported instructions return an error.
+/// return `Ok((Some(Unsupported), []))`. Malformed supported instructions return an error.
 pub(crate) fn decode_solrfqv2_legs(
     data: &[u8],
 ) -> std::io::Result<(Option<EntrypointKind>, Vec<DecodedFill>)> {

@@ -50,7 +50,7 @@ fn emit(ty: &Value, types: &[Value], stack: &mut Vec<String>) -> String {
                 let mut code = "match u8::deserialize_reader(reader)? {".to_owned();
                 for (tag, variant) in variants.iter().enumerate() {
                     code.push_str(&format!(
-                        "{tag} => {{ {} }},",
+                        "{tag} => {{ {} }},\n",
                         fields(&variant["fields"], types, stack)
                     ));
                 }
@@ -82,9 +82,49 @@ fn emit(ty: &Value, types: &[Value], stack: &mut Vec<String>) -> String {
 
 fn main() {
     println!("cargo:rerun-if-changed=idls/dex_solana_v3.json");
-    let idl: Value =
-        serde_json::from_str(&fs::read_to_string("idls/dex_solana_v3.json").unwrap()).unwrap();
+    let idl_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("idls/dex_solana_v3.json");
+    let idl: Value = serde_json::from_str(&fs::read_to_string(idl_path).unwrap()).unwrap();
     let types = idl["types"].as_array().expect("IDL types");
+    // These outer structures are read by hand in idl_types.rs. Refuse to
+    // generate a decoder if the IDL no longer matches their wire layouts.
+    for (name, expected) in [
+        (
+            "SwapArgs",
+            json!({"kind":"struct","fields":[
+                {"name":"order_id","type":"u64"},
+                {"name":"amount_in","type":"u64"},
+                {"name":"expect_amount_out","type":"u64"},
+                {"name":"slippage","type":"u16"},
+                {"name":"routes","type":{"vec":{"defined":{"name":"Route"}}}}
+            ]}),
+        ),
+        (
+            "SwapArgsTokenLedger",
+            json!({"kind":"struct","fields":[
+                {"name":"order_id","type":"u64"},
+                {"name":"expect_amount_out","type":"u64"},
+                {"name":"slippage","type":"u16"},
+                {"name":"routes","type":{"vec":{"defined":{"name":"Route"}}}}
+            ]}),
+        ),
+        (
+            "Route",
+            json!({"kind":"struct","fields":[
+                {"name":"dex","type":{"defined":{"name":"Dex"}}},
+                {"name":"weight","type":"u16"},
+                {"name":"index","type":"u8"}
+            ]}),
+        ),
+    ] {
+        let actual = &types
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("missing IDL type: {name}"))["type"];
+        assert_eq!(
+            actual, &expected,
+            "{name} layout changed; update idl_types.rs before rebuilding"
+        );
+    }
     let variants = types.iter().find(|t| t["name"] == "Dex").expect("Dex type")["type"]["variants"]
         .as_array()
         .expect("Dex variants");
@@ -126,7 +166,7 @@ fn main() {
         } else {
             fields(&variant["fields"], types, &mut vec!["Dex".into()])
         };
-        code.push_str(&format!("{tag} => {{ {body} }},"));
+        code.push_str(&format!("{tag} => {{ {body} }},\n"));
     }
     assert!(found_rfq, "SolRfqV2 missing from IDL");
     code.push_str("_ => return Err(borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, format!(\"unknown Dex variant tag {tag} in embedded aggregator IDL\"))), } Ok(Dex::Other(tag)) }");
@@ -144,6 +184,8 @@ fn main() {
         code.push_str(&format!("pub const {name}: [u8; 8] = {bytes:?};"));
     }
     code.push('}');
+    let syntax = syn::parse_file(&code).expect("generated aggregator Rust must be valid");
+    let code = prettyplease::unparse(&syntax);
     fs::write(
         PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("aggregator_idl.rs"),
         code,

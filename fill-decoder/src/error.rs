@@ -1,6 +1,11 @@
 use thiserror::Error;
 
+/// Transaction and message decoding errors.
+///
+/// New variants may be added in future releases. Downstream `match` expressions
+/// must include a wildcard arm to handle errors they do not yet recognize.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FillDecoderError {
     #[error("input bytes are not valid base64")]
     InvalidEncoding,
