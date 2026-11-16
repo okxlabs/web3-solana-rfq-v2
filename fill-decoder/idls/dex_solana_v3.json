@@ -4154,6 +4154,116 @@
           },
           {
             "name": "Deriverse"
+          },
+          {
+            "name": "MSwap"
+          },
+          {
+            "name": "ByrealClmm3"
+          },
+          {
+            "name": "JupiterLendAmm",
+            "fields": [
+              {
+                "name": "oracle_accounts_count",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "Flowdesk"
+          },
+          {
+            "name": "TesseraV2"
+          },
+          {
+            "name": "GatorSwap",
+            "fields": [
+              {
+                "name": "tox_engaged",
+                "docs": [
+                  "Inserts the readonly `toxmdl` PDA before guest / fee mint / refs.",
+                  "Computed from the SDK's resolved config, router slot and model blob."
+                ],
+                "type": "bool"
+              },
+              {
+                "name": "ref_account_count",
+                "docs": [
+                  "Only reference-pool accounts: Ray=12 / Pump=23 / Met=8 / Dlmm=2 /",
+                  "Whirl=2 per group. Excludes toxmdl, guest and fee mint."
+                ],
+                "type": "u8"
+              },
+              {
+                "name": "seq",
+                "docs": [
+                  "The exact pool sequence signed off-chain; do not replace it with a",
+                  "newer on-chain sequence while constructing the CPI data."
+                ],
+                "type": "u64"
+              },
+              {
+                "name": "signature",
+                "docs": [
+                  "Ed25519 signature over swap_authority || pool || seq(LE) || input_mint.",
+                  "The protocol's router account carries the verification public key."
+                ],
+                "type": {
+                  "array": [
+                    "u8",
+                    64
+                  ]
+                }
+              },
+              {
+                "name": "has_fee_mint",
+                "docs": [
+                  "Physically includes the base mint after guest when the resolved v3",
+                  "Token-2022 mint has a TransferFeeConfig extension. No absent slot."
+                ],
+                "type": "bool"
+              }
+            ]
+          },
+          {
+            "name": "NativePamm"
+          },
+          {
+            "name": "PumpfunBuyV3"
+          },
+          {
+            "name": "PumpfunSellV3"
+          },
+          {
+            "name": "PumpswapBuyV2"
+          },
+          {
+            "name": "PumpswapSellV2"
+          },
+          {
+            "name": "SendfunLaunchpad"
+          },
+          {
+            "name": "SendfunDexAmm"
+          },
+          {
+            "name": "Obsidian"
+          },
+          {
+            "name": "PumpMultiHop",
+            "fields": [
+              {
+                "name": "hop_count",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "ObsidianV1"
+          },
+          {
+            "name": "MeteoraDlmmPro"
           }
         ]
       }
@@ -4260,6 +4370,70 @@
                 "type": "u64"
               }
             ]
+          },
+          {
+            "name": "HumidifiSwapRouter",
+            "fields": [
+              {
+                "name": "router_id",
+                "type": "u64"
+              },
+              {
+                "name": "claimed_ms",
+                "type": "u64"
+              },
+              {
+                "name": "seed_rng",
+                "type": {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                }
+              },
+              {
+                "name": "token",
+                "type": {
+                  "array": [
+                    "u8",
+                    16
+                  ]
+                }
+              },
+              {
+                "name": "end_user",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "ScorchV2",
+            "fields": [
+              {
+                "name": "id",
+                "type": "u128"
+              }
+            ]
+          },
+          {
+            "name": "TesseraV2"
+          },
+          {
+            "name": "ZerofiWithSig",
+            "fields": [
+              {
+                "name": "signature",
+                "type": {
+                  "array": [
+                    "u8",
+                    40
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "Kipseli"
           }
         ]
       }

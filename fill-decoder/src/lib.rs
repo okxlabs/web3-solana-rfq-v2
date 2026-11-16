@@ -69,7 +69,7 @@ pub const IDL_JSON: &str = include_str!("../idls/solana_rfq_v2.json");
 pub fn decode_transaction_bytes(bytes: &[u8]) -> Result<DecodedTransaction> {
     let parsed = wire::parse_transaction(bytes)?;
     let mut tx = transaction::decode_transaction(parsed)?;
-    extract_fills(&mut tx.message);
+    extract_fills(&mut tx.message)?;
     Ok(tx)
 }
 
@@ -82,7 +82,7 @@ pub fn decode_transaction_base64(b64: &str) -> Result<DecodedTransaction> {
 pub fn decode_message_bytes(bytes: &[u8]) -> Result<DecodedMessage> {
     let parsed = wire::parse_message(bytes)?;
     let mut msg = transaction::decode_message(parsed)?;
-    extract_fills(&mut msg);
+    extract_fills(&mut msg)?;
     Ok(msg)
 }
 
@@ -99,16 +99,22 @@ fn base64_decode(b64: &str) -> Result<Vec<u8>> {
 
 /// Walk every top-level instruction whose program is `dex-solana-v3` and
 /// attach any SolRfqV2 legs found in its `SwapArgs.routes`.
-fn extract_fills(msg: &mut DecodedMessage) {
+fn extract_fills(msg: &mut DecodedMessage) -> Result<()> {
     let static_account_keys = &msg.static_account_keys;
     for ix in msg.instructions.iter_mut() {
         let program_id = static_account_keys.get(ix.program_id_index as usize);
         if program_id.is_some_and(is_dex_solana_v3_program) {
-            let (kind, fills) = aggregator::decode_solrfqv2_legs(&ix.data);
+            let (kind, fills) = aggregator::decode_solrfqv2_legs(&ix.data).map_err(|source| {
+                FillDecoderError::Borsh(format!(
+                    "aggregator instruction {} decode failed: {source}",
+                    ix.instruction_index
+                ))
+            })?;
             ix.entrypoint = kind;
             ix.fills = fills;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

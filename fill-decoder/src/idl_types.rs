@@ -93,6 +93,8 @@ impl BorshDeserialize for Dex {
             132 => skip_exact(reader, 40)?, // ZerofiWithSig signature
             133 => skip_borsh_bytes(reader)?, // Native quote_data
             134 => skip_exact(reader, 96)?, // HumidifiSwapRouter
+            141 => skip_exact(reader, 75)?, // GatorSwap: bool + u8 + u64 + [u8; 64] + bool
+            150 => skip_exact(reader, 1)?,  // PumpMultiHop: hop_count
             0..=22
             | 25..=33
             | 36..=63
@@ -104,11 +106,13 @@ impl BorshDeserialize for Dex {
             | 122..=124
             | 127..=131
             | 135..=137
-            | 139..=140 => {}
+            | 139..=140
+            | 142..=149
+            | 151..=152 => {}
             _ => {
                 return Err(borsh::io::Error::new(
                     borsh::io::ErrorKind::InvalidData,
-                    format!("Dex variant tag {} out of declared range 0..=140", tag),
+                    format!("unsupported Dex variant tag {tag}"),
                 ));
             }
         }
@@ -149,14 +153,12 @@ fn skip_dynamic_route_spec<R: Read>(reader: &mut R) -> borsh::io::Result<()> {
             5 | 16 => skip_exact(reader, 16)?, // Scorch / ScorchV2 id
             10 => skip_exact(reader, 99)?,     // BisonFiWithSig
             15 => skip_exact(reader, 96)?,     // HumidifiSwapRouter
-            0..=2 | 4 | 6..=9 | 11..=13 | 17 => {}
+            18 => skip_exact(reader, 40)?,     // ZerofiWithSig signature
+            0..=2 | 4 | 6..=9 | 11..=13 | 17 | 19 => {}
             _ => {
                 return Err(borsh::io::Error::new(
                     borsh::io::ErrorKind::InvalidData,
-                    format!(
-                        "DynamicCandidate tag {} out of declared range 0..=17",
-                        candidate
-                    ),
+                    format!("unsupported DynamicCandidate variant tag {candidate}"),
                 ));
             }
         }
@@ -262,10 +264,15 @@ impl core::fmt::Display for EntrypointKind {
 /// entrypoint discriminators. Returns the decoded args (skipping any
 /// per-entrypoint suffix fields like commission_info), an explicit
 /// `Unsupported` marker for the rejected `swap_tob*` family, or `None` if no
-/// discriminator matched.
+/// discriminator matched or the args are malformed. Transaction/message
+/// decoding uses the strict internal reader to preserve the specific error.
 pub fn decode_swap_args(data: &[u8]) -> Option<AnySwapArgs> {
+    try_decode_swap_args(data).ok().flatten()
+}
+
+pub(crate) fn try_decode_swap_args(data: &[u8]) -> borsh::io::Result<Option<AnySwapArgs>> {
     if data.len() < 8 {
-        return None;
+        return Ok(None);
     }
     let mut disc = [0u8; 8];
     disc.copy_from_slice(&data[..8]);
@@ -273,11 +280,9 @@ pub fn decode_swap_args(data: &[u8]) -> Option<AnySwapArgs> {
 
     // Try the simple SwapArgs entrypoints first; suffix fields after the args
     // are ignored by Borsh-from-reader (it stops at end of struct definition).
-    let try_swap_args = |body: &[u8]| -> Option<AnySwapArgs> {
+    let try_swap_args = |body: &[u8]| {
         let mut reader = std::io::Cursor::new(body);
-        SwapArgs::deserialize_reader(&mut reader)
-            .ok()
-            .map(AnySwapArgs::Concrete)
+        SwapArgs::deserialize_reader(&mut reader).map(|args| Some(AnySwapArgs::Concrete(args)))
     };
     match disc {
         entrypoint::SWAP
@@ -294,8 +299,8 @@ pub fn decode_swap_args(data: &[u8]) -> Option<AnySwapArgs> {
         | entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER
         | entrypoint::SWAP_TOB_WITH_TOKEN_LEDGER_V3
         | entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER
-        | entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER_V3 => Some(AnySwapArgs::Unsupported),
-        _ => None,
+        | entrypoint::SWAP_TOB_WITH_RECEIVER_TOKEN_LEDGER_V3 => Ok(Some(AnySwapArgs::Unsupported)),
+        _ => Ok(None),
     }
 }
 
@@ -324,6 +329,36 @@ pub(crate) fn encode_sol_rfq_v2_variant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_dynamic_candidates_consume_exact_bodies() {
+        for (tag, body_len) in [(18, 40), (19, 0)] {
+            let mut bytes = vec![126]; // DynamicRouteV1
+            bytes.extend_from_slice(&1u32.to_le_bytes()); // one candidate
+            bytes.push(tag);
+            bytes.resize(bytes.len() + body_len, 0);
+            bytes.extend_from_slice(&[2, 0]); // SelectionMode::Hint(0)
+            for end in 0..bytes.len() {
+                assert!(
+                    Dex::deserialize_reader(&mut &bytes[..end]).is_err(),
+                    "candidate {tag}, length {end}"
+                );
+            }
+            let len = bytes.len();
+            bytes.push(255);
+            let mut reader = std::io::Cursor::new(&bytes);
+            assert_eq!(
+                Dex::deserialize_reader(&mut reader).unwrap(),
+                Dex::Other(126)
+            );
+            assert_eq!(reader.position() as usize, len);
+        }
+        let bytes = [126, 1, 0, 0, 0, 255]; // unsupported candidate
+        let error = Dex::deserialize_reader(&mut &bytes[..]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unsupported DynamicCandidate variant tag 255"));
+    }
 
     #[test]
     fn decodes_sol_rfq_v2_variant() {
@@ -373,9 +408,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_out_of_range_tag() {
+    fn rejects_unsupported_tag() {
         let mut reader = std::io::Cursor::new(&[200u8][..]);
-        assert!(Dex::deserialize_reader(&mut reader).is_err());
+        let error = Dex::deserialize_reader(&mut reader).unwrap_err();
+        assert_eq!(error.to_string(), "unsupported Dex variant tag 200");
     }
 
     #[test]
